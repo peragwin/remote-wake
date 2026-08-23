@@ -1,0 +1,22 @@
+name = "remote-wake-relay"
+main = "src/index.ts"
+compatibility_date = "2026-01-01"
+
+# One Durable Object instance per deviceId (idFromName(deviceId)).
+[[durable_objects.bindings]]
+name = "DEVICE"
+class_name = "DeviceObject"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["DeviceObject"]
+
+# Observability: logs are enabled, but the relay never logs request/response
+# bodies (see docs/security.md — zero-knowledge stance).
+[observability]
+enabled = true
+
+# Uncomment and set your own hostname to serve the relay from a custom domain.
+# [[routes]]
+# pattern = "relay.example.com"
+# custom_domain = true

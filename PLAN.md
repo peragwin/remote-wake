@@ -21,10 +21,10 @@ Status legend: ☐ todo · ◐ in progress · ☑ done
 - ☐ `main` — wiring it together, status LED patterns
 
 ### relay/ (Cloudflare Worker + Durable Object, TypeScript)
-- ☐ Worker routing `/v1/send`, `/v1/presence`, `/v1/device` (WS upgrade) → per-device Durable Object
-- ☐ DO: single device WS, token check (constant-time), pending-command map (id → resolver, 10 s timeout), presence
-- ☐ Limits: 4 KiB body, token bucket rate limit, no persistence of payloads
-- ☐ `wrangler.toml`, deploy docs, vitest unit tests for routing/limits
+- ☑ Worker routing `/v1/send`, `/v1/presence`, `/v1/device` (WS upgrade) → per-device Durable Object
+- ☑ DO: single device WS, token check (constant-time), pending-command map (id → resolver, 10 s timeout), presence
+- ☑ Limits: 4 KiB body, token bucket rate limit, no persistence of payloads
+- ☑ `wrangler.toml`, deploy docs, vitest unit tests for routing/limits
 
 ### app/ (PWA, no framework build step — vanilla TS/JS, single deployable dir)
 - ☐ Sleek dark UI: device card (online dot, RSSI), big WAKE, unlock-sequence composer, power tap / press-and-hold with 2-step confirm on hold

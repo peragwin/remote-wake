@@ -108,15 +108,20 @@ are not signed in v1; signing them is a v2 candidate).
   `Authorization: Bearer <deviceToken>`.
 - Device sends `{"hello": {"fw": "x.y.z"}}` on connect; relay pushes command
   envelopes as text frames; device pushes response envelopes.
-- WebSocket ping/pong every 25 s; device reconnects with exponential backoff
-  (1 s → 60 s cap, ±20 % jitter).
+- Keepalive is application-layer (Workers cannot emit RFC 6455 ping frames):
+  the relay sends `{"v":1,"ping":<unix seconds>}` every 25 s — the device MUST
+  ignore any frame that is not a command envelope (no `id`/`act`) and may treat
+  it as liveness evidence; a device→relay text frame `ping` is answered `pong`.
+  Device reconnects with exponential backoff (1 s → 60 s cap, ±20 % jitter).
 
 ### Phone ↔ relay
 - `POST https://<relay>/v1/send/<deviceId>` with
   `Authorization: Bearer <deviceToken>`, body = command envelope.
   Relay forwards to the device if connected and returns the device's response
   (long-poll up to 10 s), else `504 {"err":"device_offline"}`.
-- `GET /v1/presence/<deviceId>` (same auth) → `{"online": true, "since": ts}`.
+- `GET /v1/presence/<deviceId>` (same auth) → `{"online": true, "since": ts}`
+  (`since` = unix seconds of the last online/offline transition, `null` if the
+  device has never connected).
 
 The relay validates only: bearer token match, body ≤ 4 KiB, well-formed JSON,
 `dev` matches path. It never inspects `sig` and stores nothing but the token
