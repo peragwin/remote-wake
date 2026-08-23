@@ -27,11 +27,11 @@ Status legend: ☐ todo · ◐ in progress · ☑ done
 - ☑ `wrangler.toml`, deploy docs, vitest unit tests for routing/limits
 
 ### app/ (PWA, no framework build step — vanilla TS/JS, single deployable dir)
-- ☐ Sleek dark UI: device card (online dot, RSSI), big WAKE, unlock-sequence composer, power tap / press-and-hold with 2-step confirm on hold
-- ☐ Crypto: WebCrypto Ed25519 (fallback @noble/ed25519 vendored), non-extractable where supported; counter persistence; signing string per spec
-- ☐ WebAuthn (platform authenticator) gate before any signing
-- ☐ Pairing flow UI (setup-mode page is served by firmware; app imports the returned JSON blob / QR)
-- ☐ PWA: manifest, service worker, installable, offline shell
+- ☑ Sleek dark UI: device card (online dot, RSSI), big WAKE, unlock-sequence composer, power tap / press-and-hold with 2-step confirm on hold
+- ☑ Crypto: WebCrypto Ed25519 (fallback @noble/ed25519 vendored), non-extractable where supported; counter persistence; signing string per spec
+- ☑ WebAuthn (platform authenticator) gate before any signing
+- ☑ Pairing flow UI (setup-mode page is served by firmware; app imports the returned JSON blob / QR)
+- ☑ PWA: manifest, service worker, installable, offline shell
 
 ## Phase 2 — integration
 - ☐ Cross-check all three signing-string implementations against shared test vectors (`docs/test-vectors.json`)

@@ -10,7 +10,7 @@
  * logs a body.
  */
 
-import { bearerToken, errJson } from "./http";
+import { bearerToken, errJson, withCors, CORS_HEADERS } from "./http";
 import { parseRoute } from "./routes";
 import type { Env } from "./types";
 
@@ -30,15 +30,22 @@ export default {
     if (route === null) return errJson(404, "not_found");
     if (route === "bad_device_id") return errJson(404, "bad_device_id");
 
+    // CORS preflight for the browser-hosted PWA (send/presence only; the
+    // device websocket route is not a CORS consumer).
+    if (request.method === "OPTIONS" && route.kind !== "device") {
+      return new Response(null, { status: 204, headers: CORS_HEADERS });
+    }
+
     if (request.method !== METHODS[route.kind]) {
       return errJson(405, "method_not_allowed");
     }
 
     // Auth is re-checked inside the DO against the claimed token hash; this is
     // only a cheap edge rejection of unauthenticated traffic.
-    if (bearerToken(request) === null) return errJson(401, "unauthorized");
+    if (bearerToken(request) === null) return withCors(errJson(401, "unauthorized"));
 
     const id = env.DEVICE.idFromName(route.deviceId);
-    return env.DEVICE.get(id).fetch(request);
+    const res = await env.DEVICE.get(id).fetch(request);
+    return route.kind === "device" ? res : withCors(res);
   },
 } satisfies ExportedHandler<Env>;

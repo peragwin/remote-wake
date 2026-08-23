@@ -29,6 +29,24 @@ export function okJson(value: unknown, status = 200): Response {
 }
 
 /**
+ * CORS for the browser-hosted PWA. Bearer auth only (no cookies), so a
+ * wildcard origin grants nothing beyond what any non-browser client has.
+ */
+export const CORS_HEADERS = {
+  "access-control-allow-origin": "*",
+  "access-control-allow-methods": "GET, POST, OPTIONS",
+  "access-control-allow-headers": "authorization, content-type",
+  "access-control-max-age": "86400",
+} as const;
+
+/** Re-wrap a response with CORS headers appended (DO responses are immutable). */
+export function withCors(res: Response): Response {
+  const out = new Response(res.body, res);
+  for (const [k, v] of Object.entries(CORS_HEADERS)) out.headers.set(k, v);
+  return out;
+}
+
+/**
  * Extract the bearer credential from an `Authorization` header.
  * Returns `null` when the header is missing, malformed, or empty.
  */

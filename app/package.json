@@ -1,0 +1,13 @@
+{
+  "name": "remote-wake-app",
+  "version": "1.0.0",
+  "private": true,
+  "description": "remote-wake PWA controller — no build step, plain ES modules",
+  "type": "module",
+  "scripts": {
+    "test": "node --test \"test/**/*.test.mjs\"",
+    "serve": "node tools/serve.mjs",
+    "icons": "node tools/make-icons.mjs"
+  },
+  "license": "MIT"
+}

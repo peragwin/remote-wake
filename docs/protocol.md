@@ -82,7 +82,7 @@ Failures produce an `err` response (below) and are rate-limited.
 | `act`        | `args`                          | Effect |
 |--------------|---------------------------------|--------|
 | `ping`       | `{}`                            | Liveness; responds `pong` with uptime + state. |
-| `status`     | `{}`                            | Reports USB mount/suspend state, Wi-Fi RSSI, firmware version. |
+| `status`     | `{}`                            | Reports device state. `res`: `{"fw": "x.y.z", "rssi": -55, "usb": "mounted"\|"suspended"\|"down", "uptime": <seconds>}`. |
 | `wake`       | `{}`                            | HID: press+release a zero-side-effect key (Left-Ctrl) twice, 50 ms apart. Wakes a sleeping host. |
 | `type`       | `{"text": "...", "enter": true}`| HID: type UTF-8 text (US layout mapping), optional trailing Enter. Max 256 chars. Used for typing the login password. |
 | `keys`       | `{"seq": [["LGUI","L"],["ENTER"]]}` | HID: sequence of chords, each = list of key names, pressed together then released, 30 ms apart. Max 32 chords. |
@@ -134,7 +134,8 @@ hash and presence.
 2. Phone joins AP, opens the setup page, which collects: home Wi-Fi
    credentials, relay URL, and POSTs the phone's Ed25519 public key →
    `/pair {"pubkey": "<b64url>", "name": "Alex's phone"}`.
-3. Device replies `{"deviceId": ..., "deviceToken": ..., "relayUrl": ...}`,
+3. Device replies `{"deviceId": ..., "deviceToken": ..., "relayUrl": ...,
+   "kid": "p1"}` (`kid` = the slot the key was stored in),
    which the PWA stores locally; device stores pubkey in slot `p1`
    (next free slot for subsequent pairings), then reboots into normal mode.
 4. Pairing endpoint is ONLY available in setup mode — never on the home

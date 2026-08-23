@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="remote-wake">
+  <title>remote-wake</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="rgb(11,14,26)"/>
+      <stop offset="1" stop-color="rgb(23,18,48)"/>
+    </linearGradient>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="9.22" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <rect width="512" height="512" fill="url(#bg)"/>
+  <g fill="none">
+    <path d="M350.509 188.529A116.122 116.122 0 0 1 350.509 323.471" stroke="rgb(124,138,255)" stroke-width="17.69" stroke-linecap="round" fill="none" opacity="0.92"/>
+    <path d="M161.491 323.471A116.122 116.122 0 0 1 161.491 188.529" stroke="rgb(124,138,255)" stroke-width="17.69" stroke-linecap="round" fill="none" opacity="0.92"/>
+    <path d="M390.257 182.655A152.986 152.986 0 0 1 390.257 329.345" stroke="rgb(124,138,255)" stroke-width="17.69" stroke-linecap="round" fill="none" opacity="0.7000000000000001"/>
+    <path d="M121.743 329.345A152.986 152.986 0 0 1 121.743 182.655" stroke="rgb(124,138,255)" stroke-width="17.69" stroke-linecap="round" fill="none" opacity="0.7000000000000001"/>
+  </g>
+  <g filter="url(#glow)">
+    <path d="M299.910 194.494A75.571 75.571 0 1 1 212.090 194.494" stroke="rgb(126,231,255)" stroke-width="22.86" stroke-linecap="round" fill="none"/>
+    <path d="M256.00 147.25V228.35" stroke="rgb(126,231,255)" stroke-width="22.86" stroke-linecap="round"/>
+  </g>
+</svg>

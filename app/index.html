@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>remote-wake</title>
+<meta name="description" content="Wake, unlock and power your PC from your phone.">
+<meta name="theme-color" content="#0b0e1a">
+<meta name="color-scheme" content="dark">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="remote-wake">
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="icon" href="./icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
+<link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+
+<div class="aurora" aria-hidden="true"></div>
+
+<!-- ══════════════════════════════════════════════════ boot / loading ══ -->
+<div id="boot" class="boot">
+  <div class="boot-mark" aria-hidden="true"></div>
+  <p class="boot-text">Starting…</p>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════ header ══ -->
+<header class="topbar" id="topbar" hidden>
+  <div class="topbar-brand">
+    <span class="brand-mark" aria-hidden="true"></span>
+    <span class="brand-name">remote<span class="brand-dim">-wake</span></span>
+  </div>
+  <button class="icon-btn" id="btn-settings" type="button" aria-label="Settings">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/><path d="m19.4 13-.3-1 1.7-1.6-1.7-3-2.3.6-.9-.5-.6-2.3h-3.4l-.6 2.3-.9.5-2.3-.6-1.7 3L8.1 12l-.1 1-1.7 1.6 1.7 3 2.3-.6.9.5.6 2.3h3.4l.6-2.3.9-.5 2.3.6 1.7-3L19.4 13Z"/></svg>
+  </button>
+</header>
+
+<main id="app" hidden>
+
+  <!-- ════════════════════════════════════════════════════ home view ══ -->
+  <section class="view" id="view-home" hidden>
+
+    <!-- device presence card -->
+    <article class="card device-card" id="device-card">
+      <div class="device-head">
+        <div class="device-id-wrap">
+          <h1 class="device-name" id="device-name">Device</h1>
+          <p class="device-id mono" id="device-id">—</p>
+        </div>
+        <button class="icon-btn small" id="btn-refresh" type="button" aria-label="Refresh device status">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.6"/><path d="M20 4v4h-4"/></svg>
+        </button>
+      </div>
+
+      <div class="presence" id="presence">
+        <span class="dot" id="presence-dot" data-state="unknown" aria-hidden="true"></span>
+        <span class="presence-text" id="presence-text">Checking…</span>
+      </div>
+
+      <dl class="stats" id="device-stats">
+        <div class="stat"><dt>Signal</dt><dd id="stat-rssi">—</dd></div>
+        <div class="stat"><dt>USB</dt><dd id="stat-usb">—</dd></div>
+        <div class="stat"><dt>Firmware</dt><dd id="stat-fw">—</dd></div>
+      </dl>
+    </article>
+
+    <!-- the big one -->
+    <div class="wake-zone">
+      <button class="wake" id="btn-wake" type="button" aria-label="Wake the PC">
+        <span class="wake-ring" aria-hidden="true"></span>
+        <span class="wake-ring wake-ring-2" aria-hidden="true"></span>
+        <span class="wake-face">
+          <svg class="wake-glyph" viewBox="0 0 48 48" aria-hidden="true">
+            <path d="M24 6v14"/>
+            <path d="M15.5 12.4a13 13 0 1 0 17 0"/>
+          </svg>
+          <span class="wake-label">WAKE</span>
+        </span>
+      </button>
+      <p class="wake-hint" id="wake-hint">Taps Left-Ctrl twice to wake a sleeping host</p>
+    </div>
+
+    <!-- unlock -->
+    <article class="card" id="unlock-card">
+      <div class="card-head">
+        <h2>Unlock</h2>
+        <button class="text-btn" id="btn-unlock-edit" type="button">Edit</button>
+      </div>
+      <p class="card-sub" id="unlock-sub">No unlock text stored.</p>
+      <button class="btn btn-primary btn-block" id="btn-unlock" type="button" disabled>
+        <svg viewBox="0 0 24 24" class="btn-ico" aria-hidden="true"><path d="M6 11h12v9H6z"/><path d="M9 11V7a3 3 0 0 1 6 0"/></svg>
+        Send unlock
+      </button>
+    </article>
+
+    <!-- key chords -->
+    <article class="card" id="keys-card">
+      <div class="card-head">
+        <h2>Key combos</h2>
+        <button class="text-btn" id="btn-keys-clear" type="button" hidden>Clear</button>
+      </div>
+      <div class="chips" id="chip-row"></div>
+      <div class="seq-strip" id="seq-strip" hidden>
+        <div class="seq-list" id="seq-list"></div>
+        <button class="btn btn-ghost btn-block" id="btn-keys-send" type="button">Send sequence</button>
+      </div>
+    </article>
+
+    <!-- power -->
+    <article class="card card-danger" id="power-card">
+      <div class="card-head">
+        <h2>Power</h2>
+        <span class="pill pill-danger">Physical button</span>
+      </div>
+      <p class="card-sub">Tap pulses the power switch for 200 ms — powers on, or asks the OS to shut down.</p>
+      <div class="power-row">
+        <button class="btn btn-ghost" id="btn-power-tap" type="button">
+          <svg viewBox="0 0 24 24" class="btn-ico" aria-hidden="true"><path d="M12 4v8"/><path d="M7.6 7.6a7 7 0 1 0 8.8 0"/></svg>
+          Tap
+        </button>
+        <button class="hold-btn" id="btn-power-hold" type="button"
+                aria-label="Hold to force power off">
+          <svg class="hold-ring" viewBox="0 0 100 100" aria-hidden="true">
+            <circle class="hold-track" cx="50" cy="50" r="45"/>
+            <circle class="hold-progress" cx="50" cy="50" r="45"/>
+          </svg>
+          <span class="hold-face">
+            <span class="hold-title">Hold</span>
+            <span class="hold-sub">force off</span>
+          </span>
+        </button>
+      </div>
+      <p class="card-note">Force off cuts power immediately — unsaved work is lost.</p>
+    </article>
+
+    <p class="footer-note" id="footer-note"></p>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════ pair view ══ -->
+  <section class="view" id="view-pair" hidden>
+    <div class="hero">
+      <div class="hero-mark" aria-hidden="true"></div>
+      <h1 class="hero-title">Pair your device</h1>
+      <p class="hero-sub">Three steps, once. Your phone keeps the signing key; the
+        relay only carries the message.</p>
+    </div>
+
+    <ol class="steps">
+      <li class="step">
+        <span class="step-n">1</span>
+        <div class="step-body">
+          <h3>Join the device Wi-Fi</h3>
+          <p>Power the device (or hold <b>BOOT</b> for 5 s) and join the
+             <code>remote-wake-xxxx</code> network. The password is printed on
+             the device.</p>
+        </div>
+      </li>
+      <li class="step">
+        <span class="step-n">2</span>
+        <div class="step-body">
+          <h3>Give it this phone's public key</h3>
+          <p>Open <code>http://192.168.4.1</code>, enter your home Wi-Fi and relay
+             URL, and paste this key:</p>
+          <div class="key-export">
+            <code class="key-value mono" id="pubkey-value">generating…</code>
+            <div class="key-actions">
+              <button class="btn btn-ghost btn-sm" id="btn-copy-pubkey" type="button">Copy</button>
+              <button class="btn btn-ghost btn-sm" id="btn-qr-pubkey" type="button">QR</button>
+            </div>
+          </div>
+          <div class="qr-holder" id="qr-holder" hidden></div>
+        </div>
+      </li>
+      <li class="step">
+        <span class="step-n">3</span>
+        <div class="step-body">
+          <h3>Paste what it gives back</h3>
+          <p>The setup page returns a small JSON blob. Paste it here.</p>
+          <textarea class="input textarea mono" id="pair-input" rows="5" spellcheck="false"
+            placeholder='{"deviceId":"…","deviceToken":"…","relayUrl":"https://…"}'></textarea>
+          <label class="field">
+            <span class="field-label">Name this device</span>
+            <input class="input" id="pair-name" type="text" placeholder="Study PC" maxlength="40">
+          </label>
+          <button class="btn btn-primary btn-block" id="btn-pair-save" type="button">Pair device</button>
+          <p class="inline-error" id="pair-error" hidden></p>
+        </div>
+      </li>
+    </ol>
+
+    <p class="footer-note">Pairing only works in the device's setup mode — never
+       over your home network, never through the relay.</p>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════ settings view ══ -->
+  <section class="view" id="view-settings" hidden>
+    <div class="view-head">
+      <button class="icon-btn" id="btn-back" type="button" aria-label="Back">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 19l-7-7 7-7"/></svg>
+      </button>
+      <h1>Settings</h1>
+    </div>
+
+    <article class="card">
+      <div class="card-head"><h2>Security</h2></div>
+      <label class="row-toggle">
+        <div class="row-text">
+          <span class="row-title">Require biometric unlock</span>
+          <span class="row-sub" id="webauthn-sub">Face / fingerprint before any command is signed.</span>
+        </div>
+        <input type="checkbox" id="toggle-webauthn" class="switch">
+      </label>
+      <label class="row-toggle">
+        <div class="row-text">
+          <span class="row-title">Haptics</span>
+          <span class="row-sub">Short vibration on button press.</span>
+        </div>
+        <input type="checkbox" id="toggle-haptics" class="switch">
+      </label>
+    </article>
+
+    <article class="card">
+      <div class="card-head"><h2>Unlock text</h2></div>
+      <div class="warn" id="unlock-warning">
+        <svg viewBox="0 0 24 24" class="warn-ico" aria-hidden="true"><path d="M12 9v5"/><path d="M12 17.5v.5"/><path d="M10.3 4 3 17a2 2 0 0 0 1.7 3h14.6A2 2 0 0 0 21 17L13.7 4a2 2 0 0 0-3.4 0Z"/></svg>
+        <div>
+          <b>The relay sees this text.</b> In v1 the <code>type</code> action's
+          arguments travel in the clear to the relay (they are signed, not
+          encrypted). It is stored only on this phone, but prefer a short PIN
+          login and run your own relay.
+        </div>
+      </div>
+      <label class="field">
+        <span class="field-label">Text to type</span>
+        <input class="input" id="unlock-text" type="password" autocomplete="off"
+               spellcheck="false" placeholder="Not set">
+      </label>
+      <label class="row-toggle compact">
+        <div class="row-text"><span class="row-title">Show</span></div>
+        <input type="checkbox" id="toggle-reveal" class="switch">
+      </label>
+      <label class="row-toggle compact">
+        <div class="row-text">
+          <span class="row-title">Press Enter after typing</span>
+        </div>
+        <input type="checkbox" id="toggle-enter" class="switch">
+      </label>
+      <div class="btn-row">
+        <button class="btn btn-primary" id="btn-unlock-save" type="button">Save</button>
+        <button class="btn btn-danger-ghost" id="btn-unlock-clear" type="button">Remove</button>
+      </div>
+    </article>
+
+    <article class="card">
+      <div class="card-head"><h2>Signing key</h2></div>
+      <dl class="kv">
+        <div>
+          <dt>Slot on device</dt>
+          <dd>
+            <select class="select mono" id="key-kid" aria-label="Operator key slot on the device">
+              <option value="p1">p1</option>
+              <option value="p2">p2</option>
+              <option value="p3">p3</option>
+              <option value="p4">p4</option>
+            </select>
+          </dd>
+        </div>
+        <div><dt>Backend</dt><dd id="key-mode">—</dd></div>
+        <div><dt>Counter</dt><dd class="mono" id="key-ctr">—</dd></div>
+      </dl>
+      <p class="card-sub">Which of the device's four operator slots holds this
+        phone's key. The first phone paired to a device is <code>p1</code>;
+        change this only if the device reports a <code>sig</code> error and you
+        paired after other phones.</p>
+      <p class="card-sub" id="key-mode-note"></p>
+      <div class="key-export">
+        <code class="key-value mono" id="settings-pubkey">—</code>
+        <div class="key-actions">
+          <button class="btn btn-ghost btn-sm" id="btn-copy-pubkey-2" type="button">Copy</button>
+        </div>
+      </div>
+      <button class="btn btn-ghost btn-block mt" id="btn-selftest" type="button">Test signing</button>
+    </article>
+
+    <article class="card">
+      <div class="card-head"><h2>Devices</h2></div>
+      <div id="device-list" class="device-list"></div>
+      <button class="btn btn-ghost btn-block" id="btn-add-device" type="button">Pair another device</button>
+    </article>
+
+    <article class="card card-danger">
+      <div class="card-head"><h2>Reset</h2></div>
+      <p class="card-sub">Erases the signing key, paired devices and stored unlock
+        text from this phone. The device keeps its copy of the public key until
+        you remove the slot in setup mode.</p>
+      <button class="btn btn-danger-ghost btn-block" id="btn-wipe" type="button">Erase everything</button>
+    </article>
+
+    <p class="footer-note">remote-wake protocol v1 · <span id="build-note"></span></p>
+  </section>
+</main>
+
+<!-- ═══════════════════════════════════════════════════════ overlays ══ -->
+<div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+
+<div class="sheet-scrim" id="sheet-scrim" hidden></div>
+<div class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title" hidden>
+  <div class="sheet-grab" aria-hidden="true"></div>
+  <h2 class="sheet-title" id="sheet-title"></h2>
+  <p class="sheet-body" id="sheet-body"></p>
+  <div class="sheet-extra" id="sheet-extra"></div>
+  <div class="sheet-actions" id="sheet-actions"></div>
+</div>
+
+<script type="module" src="./src/app.js"></script>
+</body>
+</html>
