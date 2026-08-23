@@ -1,0 +1,15 @@
+# esp-idf
+firmware/build/
+firmware/sdkconfig
+firmware/sdkconfig.old
+firmware/managed_components/
+firmware/dependencies.lock
+
+# node
+node_modules/
+dist/
+.wrangler/
+
+# misc
+.DS_Store
+*.log

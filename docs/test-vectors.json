@@ -1,0 +1,95 @@
+{
+  "comment": "Shared Ed25519 test vectors for the remote-wake v1 signing string. TEST KEY ONLY — never use this key in a real deployment.",
+  "seed_hex": "db5eb8fb52e15b95a1dba95796d2f0846c3d290443d3f55905da02093405e58c",
+  "pubkey_hex": "7b4ca4f6e3c7ccff779679464bda130a47fd28203303d4407d9375be7d5510ad",
+  "pubkey_b64url": "e0yk9uPHzP93lnlGS9oTCkf9KCAzA9RAfZN1vn1VEK0",
+  "vectors": [
+    {
+      "envelope": {
+        "v": 1,
+        "dev": "a1b2c3d4e5f60718",
+        "id": "0f7c1c2e-9a4b-4c1d-8e2f-3a4b5c6d7e8f",
+        "ts": 1724457600,
+        "ctr": 1,
+        "act": "wake",
+        "args": {},
+        "kid": "p1",
+        "sig": "uLroAu7moW368a_78D0IJubWbLN15TjgiVbowAeAVN4Roui7r2jRNpGuM8U_62Qvs1V_Wl1y4d6PGYD8PdDKAw"
+      },
+      "signing_string": "remote-wake-v1\na1b2c3d4e5f60718\n0f7c1c2e-9a4b-4c1d-8e2f-3a4b5c6d7e8f\n1724457600\n1\nwake\n{}"
+    },
+    {
+      "envelope": {
+        "v": 1,
+        "dev": "a1b2c3d4e5f60718",
+        "id": "1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed",
+        "ts": 1724457660,
+        "ctr": 2,
+        "act": "type",
+        "args": {
+          "text": "hunter2!",
+          "enter": true
+        },
+        "kid": "p1",
+        "sig": "6TTF7R7qdcrIz5c64ow9M7YOwvmch-kxvDKTslIDoySGzvOikTmgre-KgtZzUhhg_k2RJqE3mzsB0gQ2Dyi3DQ"
+      },
+      "signing_string": "remote-wake-v1\na1b2c3d4e5f60718\n1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed\n1724457660\n2\ntype\n{\"enter\":true,\"text\":\"hunter2!\"}"
+    },
+    {
+      "envelope": {
+        "v": 1,
+        "dev": "a1b2c3d4e5f60718",
+        "id": "2c3e4f50-6172-4839-a0b1-c2d3e4f50617",
+        "ts": 1724457720,
+        "ctr": 3,
+        "act": "keys",
+        "args": {
+          "seq": [
+            [
+              "LGUI",
+              "L"
+            ],
+            [
+              "ENTER"
+            ]
+          ]
+        },
+        "kid": "p1",
+        "sig": "BAUFe9GDMSUxPZeWtkgKZ8psk_ZScNGCJSq7tWghffStaM9eRnWKWZnwBA6J7ILDu93bV0trurgX7ZlI25RRDQ"
+      },
+      "signing_string": "remote-wake-v1\na1b2c3d4e5f60718\n2c3e4f50-6172-4839-a0b1-c2d3e4f50617\n1724457720\n3\nkeys\n{\"seq\":[[\"LGUI\",\"L\"],[\"ENTER\"]]}"
+    },
+    {
+      "envelope": {
+        "v": 1,
+        "dev": "a1b2c3d4e5f60718",
+        "id": "3d4e5f60-7182-4930-b1c2-d3e4f5061728",
+        "ts": 1724457780,
+        "ctr": 4,
+        "act": "power_tap",
+        "args": {
+          "ms": 200
+        },
+        "kid": "p1",
+        "sig": "EYPpGYY_z145tl8RgKKpbYb62SXfX3OkyOcSC89Ey3OCLefMtkxgm_v57MdTM1bGw2PWFv2QcoHTpp9TMXLJBA"
+      },
+      "signing_string": "remote-wake-v1\na1b2c3d4e5f60718\n3d4e5f60-7182-4930-b1c2-d3e4f5061728\n1724457780\n4\npower_tap\n{\"ms\":200}"
+    },
+    {
+      "envelope": {
+        "v": 1,
+        "dev": "a1b2c3d4e5f60718",
+        "id": "4e5f6071-8293-4a41-c2d3-e4f506172839",
+        "ts": 1724457840,
+        "ctr": 5,
+        "act": "power_hold",
+        "args": {
+          "ms": 6000
+        },
+        "kid": "p1",
+        "sig": "yeNmEXPx1ZMrUkmZTMSXcrWX3ME4yatULohbPniXUU3tYEmisd2KCzTij1rdSM-AvyMQwbw7wlkkQxwsk4EGAA"
+      },
+      "signing_string": "remote-wake-v1\na1b2c3d4e5f60718\n4e5f6071-8293-4a41-c2d3-e4f506172839\n1724457840\n5\npower_hold\n{\"ms\":6000}"
+    }
+  ]
+}
