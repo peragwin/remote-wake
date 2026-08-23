@@ -1,0 +1,18 @@
+# ESP32-S3 (primary target): full profile with USB HID.
+
+CONFIG_IDF_TARGET="esp32s3"
+
+# Native USB-OTG peripheral drives TinyUSB.
+CONFIG_TINYUSB_HID_COUNT=1
+CONFIG_TINYUSB_CDC_ENABLED=n
+CONFIG_TINYUSB_MSC_ENABLED=n
+CONFIG_TINYUSB_NET_MODE_NONE=y
+
+# Remote wakeup requires the device to be bus-powered & report it; we are.
+CONFIG_TINYUSB_DEBUG_LEVEL=0
+
+# S3 devkits have PSRAM on some SKUs; not required, leave off by default.
+CONFIG_SPIRAM=n
+
+# Console on the UART bridge, NOT on the OTG port (that one is the HID link).
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y

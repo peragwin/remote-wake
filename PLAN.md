@@ -11,14 +11,14 @@ Status legend: ☐ todo · ◐ in progress · ☑ done
 ## Phase 1 — components (parallel)
 
 ### firmware/ (ESP-IDF ≥ 5.2, target esp32s3; power-only profile for esp32/c3)
-- ☐ Project scaffolding: `CMakeLists.txt`, `sdkconfig.defaults`, `partitions.csv`
-- ☐ `config` — NVS-backed settings (wifi, relay url, deviceId/token, operator pubkeys, ctr high-water marks)
-- ☐ `usb_hid` — TinyUSB HID keyboard: wake, `type` (US layout), `keys` chords; report USB state (mounted/suspended)
-- ☐ `power_btn` — GPIO pulse driver (active-drive with bounds from protocol; default GPIO 5), safe idle state, mutual exclusion
-- ☐ `auth` — signing-string builder, Ed25519 verify (mbedtls), ts window, per-kid counter persistence (write ctr BEFORE executing)
-- ☐ `relay_client` — WSS with bearer header, hello, dispatch, responses, backoff+jitter, SNTP
-- ☐ `provisioning` — SoftAP + HTTP setup flow incl. `/pair` (setup mode only), factory reset via BOOT hold
-- ☐ `main` — wiring it together, status LED patterns
+- ☑ Project scaffolding: `CMakeLists.txt`, `sdkconfig.defaults`(+ per-target), `partitions.csv`, `Kconfig.projbuild`, `idf_component.yml`
+- ☑ `config` — NVS-backed settings (wifi, relay url, deviceId/token, operator pubkeys, ctr high-water marks)
+- ☑ `usb_hid` — TinyUSB HID keyboard: wake, `type` (US layout), `keys` chords; USB state + remote wakeup
+- ☑ `power_btn` — GPIO pulse driver (active-drive with bounds from protocol; default GPIO 5), safe idle state, mutual exclusion
+- ☑ `auth` — signing-string builder, canonical-JSON args, Ed25519 verify (libsodium — mbedtls has no EdDSA), ts window, per-kid counter persistence (write ctr BEFORE executing); Unity test app over `docs/test-vectors.json`
+- ☑ `relay_client` — WSS with bearer header, hello, dispatch, responses, backoff+jitter, SNTP, app-layer keepalive, 4001 supersede handling
+- ☑ `provisioning` — SoftAP + HTTP setup flow incl. `/pair` (setup mode only), factory reset via BOOT hold
+- ☑ `main` — wiring it together, status LED patterns, auth-failure rate limiting/lockout
 
 ### relay/ (Cloudflare Worker + Durable Object, TypeScript)
 - ☑ Worker routing `/v1/send`, `/v1/presence`, `/v1/device` (WS upgrade) → per-device Durable Object
@@ -34,9 +34,9 @@ Status legend: ☐ todo · ◐ in progress · ☑ done
 - ☑ PWA: manifest, service worker, installable, offline shell
 
 ## Phase 2 — integration
-- ☐ Cross-check all three signing-string implementations against shared test vectors (`docs/test-vectors.json`)
-- ☐ CI: build firmware (idf docker), typecheck+test relay, lint app
-- ☐ End-to-end walkthrough doc (`docs/setup.md`)
+- ☑ Cross-check all three signing-string implementations against shared test vectors (`docs/test-vectors.json`)
+- ☑ CI: build firmware (idf docker), typecheck+test relay, lint app
+- ☑ End-to-end walkthrough doc (`docs/setup.md`)
 
 ## Deliberate non-goals (v1)
 - OTA updates, multiple devices per relay token rotation UI, signed responses,

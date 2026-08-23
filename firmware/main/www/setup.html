@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>remote-wake setup</title>
+<style>
+  :root{
+    --bg:#0c0d10; --panel:#14161b; --line:#23262e; --fg:#e8eaf0;
+    --muted:#8b90a0; --accent:#5eead4; --accent-dim:#2dd4bf22; --bad:#f87171;
+    --ok:#4ade80;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--fg)}
+  body{
+    font:15px/1.5 ui-sans-serif,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+    padding:24px 18px 64px;-webkit-font-smoothing:antialiased;
+  }
+  main{max-width:440px;margin:0 auto}
+  header{margin:8px 0 28px}
+  h1{font-size:21px;font-weight:600;letter-spacing:-.01em;margin:0 0 6px}
+  .sub{color:var(--muted);font-size:13px}
+  .dot{display:inline-block;width:7px;height:7px;border-radius:50%;
+       background:var(--accent);margin-right:7px;vertical-align:1px}
+  section{
+    background:var(--panel);border:1px solid var(--line);border-radius:14px;
+    padding:18px;margin-bottom:16px;
+  }
+  h2{font-size:12px;font-weight:600;letter-spacing:.09em;text-transform:uppercase;
+     color:var(--muted);margin:0 0 14px}
+  label{display:block;font-size:13px;color:var(--muted);margin:12px 0 5px}
+  label:first-of-type{margin-top:0}
+  input{
+    width:100%;padding:11px 12px;background:#0e1015;color:var(--fg);
+    border:1px solid var(--line);border-radius:9px;font:inherit;
+  }
+  input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-dim)}
+  button{
+    width:100%;margin-top:16px;padding:12px 14px;border:0;border-radius:9px;
+    background:var(--accent);color:#04211d;font:600 15px/1 inherit;cursor:pointer;
+  }
+  button:disabled{opacity:.5;cursor:default}
+  button.secondary{background:transparent;color:var(--fg);border:1px solid var(--line)}
+  .kv{display:flex;justify-content:space-between;gap:12px;font-size:13px;
+      padding:7px 0;border-bottom:1px solid var(--line)}
+  .kv:last-child{border-bottom:0}
+  .kv span:first-child{color:var(--muted)}
+  code{font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;word-break:break-all}
+  .note{color:var(--muted);font-size:12.5px;margin-top:12px}
+  .msg{margin-top:14px;font-size:13px;padding:10px 12px;border-radius:9px;display:none}
+  .msg.show{display:block}
+  .msg.err{background:#3b1418;color:var(--bad);border:1px solid #5c1f25}
+  .msg.ok{background:#0f2a1c;color:var(--ok);border:1px solid #1c4630}
+  .steps{counter-reset:s;list-style:none;padding:0;margin:0;font-size:13px;color:var(--muted)}
+  .steps li{counter-increment:s;padding:5px 0 5px 26px;position:relative}
+  .steps li::before{
+    content:counter(s);position:absolute;left:0;top:5px;width:18px;height:18px;
+    border-radius:50%;background:var(--line);color:var(--fg);font-size:11px;
+    display:grid;place-items:center;
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1><span class="dot"></span>remote-wake setup</h1>
+    <div class="sub">Device <code id="devid">…</code></div>
+  </header>
+
+  <section>
+    <h2>Status</h2>
+    <div class="kv"><span>Device ID</span><code id="s-dev">…</code></div>
+    <div class="kv"><span>Paired keys</span><span id="s-keys">…</span></div>
+    <div class="kv"><span>Wi-Fi</span><span id="s-ssid">not set</span></div>
+    <div class="kv"><span>Firmware</span><span id="s-fw">…</span></div>
+  </section>
+
+  <section>
+    <h2>1 · Network</h2>
+    <form id="f-net">
+      <label for="ssid">Wi-Fi network (2.4 GHz)</label>
+      <input id="ssid" name="ssid" autocapitalize="none" autocorrect="off" required>
+      <label for="pass">Wi-Fi password</label>
+      <input id="pass" name="pass" type="password" autocomplete="off">
+      <label for="relay">Relay URL</label>
+      <input id="relay" name="relay" placeholder="wss://relay.example.com" required>
+      <button type="submit">Save network</button>
+    </form>
+    <div class="msg" id="m-net"></div>
+    <p class="note">The ESP32 only joins 2.4 GHz networks.</p>
+  </section>
+
+  <section>
+    <h2>2 · Pair this phone</h2>
+    <ol class="steps">
+      <li>Open the remote-wake app on this phone.</li>
+      <li>Tap <b>Pair a device</b> — it generates a signing key.</li>
+      <li>Paste the public key it shows below.</li>
+    </ol>
+    <form id="f-pair">
+      <label for="pubkey">Ed25519 public key (base64url)</label>
+      <input id="pubkey" name="pubkey" autocapitalize="none" autocorrect="off"
+             spellcheck="false" required>
+      <label for="name">Name for this phone</label>
+      <input id="name" name="name" placeholder="Alex's phone">
+      <button type="submit">Pair</button>
+    </form>
+    <div class="msg" id="m-pair"></div>
+  </section>
+
+  <section>
+    <h2>3 · Finish</h2>
+    <p class="note">Reboots into normal mode and connects to the relay. The
+      setup page and the pairing endpoint disappear until you hold BOOT for
+      5 seconds again.</p>
+    <button class="secondary" id="b-done">Reboot into normal mode</button>
+    <div class="msg" id="m-done"></div>
+  </section>
+</main>
+
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+
+  function say(el, text, kind) {
+    el.textContent = text;
+    el.className = 'msg show ' + (kind || 'ok');
+  }
+
+  function post(path, body) {
+    return fetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (j) {
+        if (!r.ok) { throw new Error(j.err || ('HTTP ' + r.status)); }
+        return j;
+      });
+    });
+  }
+
+  function refresh() {
+    return fetch('/info').then(function (r) { return r.json(); })
+      .then(function (j) {
+        $('devid').textContent = j.deviceId || '';
+        $('s-dev').textContent = j.deviceId || '';
+        $('s-keys').textContent = j.keys + ' / ' + j.maxKeys;
+        $('s-ssid').textContent = j.ssid ? j.ssid : 'not set';
+        $('s-fw').textContent = j.fw || '';
+        if (!$('relay').value) { $('relay').value = j.relayUrl || ''; }
+        if (!$('ssid').value && j.ssid) { $('ssid').value = j.ssid; }
+      }).catch(function () {});
+  }
+
+  $('f-net').addEventListener('submit', function (e) {
+    e.preventDefault();
+    post('/config', {
+      ssid: $('ssid').value.trim(),
+      pass: $('pass').value,
+      relay: $('relay').value.trim()
+    }).then(function () {
+      say($('m-net'), 'Network saved.', 'ok');
+      refresh();
+    }).catch(function (err) { say($('m-net'), err.message, 'err'); });
+  });
+
+  $('f-pair').addEventListener('submit', function (e) {
+    e.preventDefault();
+    post('/pair', {
+      pubkey: $('pubkey').value.trim(),
+      name: $('name').value.trim() || 'phone'
+    }).then(function (j) {
+      say($('m-pair'),
+          'Paired as ' + j.kid + '. Copy this into the app:\n' +
+          JSON.stringify({ deviceId: j.deviceId, deviceToken: j.deviceToken,
+                           relayUrl: j.relayUrl }), 'ok');
+      $('m-pair').style.whiteSpace = 'pre-wrap';
+      refresh();
+    }).catch(function (err) { say($('m-pair'), err.message, 'err'); });
+  });
+
+  $('b-done').addEventListener('click', function () {
+    post('/finish', {}).then(function () {
+      say($('m-done'), 'Rebooting — this access point will disappear.', 'ok');
+    }).catch(function (err) { say($('m-done'), err.message, 'err'); });
+  });
+
+  refresh();
+})();
+</script>
+</body>
+</html>

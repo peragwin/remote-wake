@@ -1,0 +1,84 @@
+menu "remote-wake"
+
+    config RW_PROFILE_POWER_ONLY
+        bool "Power-button-only profile (no USB HID)"
+        default y if !SOC_USB_OTG_SUPPORTED
+        default n
+        help
+            Build without TinyUSB. The device then only implements ping,
+            status, power_tap and power_hold; wake / type / keys answer
+            "usb_down". This is auto-selected on targets whose SoC has no
+            USB-OTG device peripheral (classic ESP32, ESP32-C3, ...).
+
+    config RW_PWR_GPIO
+        int "PWR_SW optocoupler GPIO"
+        range 0 48
+        default 5
+        help
+            Drives the LED side of the PC817 through a 330 ohm resistor.
+            Active high, idle low. See hardware/README.md.
+
+    config RW_BOOT_GPIO
+        int "Setup / factory-reset button GPIO"
+        range 0 48
+        default 0
+        help
+            Active-low button (the BOOT button on most devkits).
+            Hold 5 s at boot for setup mode, 15 s for factory reset.
+
+    config RW_LED_ENABLED
+        bool "Status LED (WS2812)"
+        default y
+        help
+            Addressable RGB status LED driven over RMT.
+
+    config RW_LED_GPIO
+        int "WS2812 status LED GPIO"
+        depends on RW_LED_ENABLED
+        range 0 48
+        default 48
+        help
+            GPIO48 is the on-board RGB LED on the ESP32-S3-DevKitC-1.
+
+    config RW_LED_MAX_BRIGHTNESS
+        int "Status LED peak brightness (0-255)"
+        depends on RW_LED_ENABLED
+        range 1 255
+        default 40
+        help
+            WS2812s are painfully bright; 40 is a tasteful glow.
+
+    config RW_RELAY_URL
+        string "Default relay base URL"
+        default "wss://relay.example.com"
+        help
+            Base URL of the relay. The device connects to
+            <base>/v1/device/<deviceId>. Overridden by whatever the setup
+            page stores in NVS. http/https are rewritten to ws/wss.
+
+    config RW_TS_WINDOW_SEC
+        int "Accepted |ts - now| window in seconds"
+        range 5 600
+        default 90
+        help
+            Protocol v1 mandates 90. Changing this breaks interop.
+
+    config RW_AUTH_FAIL_THRESHOLD
+        int "Auth failures per minute before lockout"
+        range 2 100
+        default 5
+
+    config RW_AUTH_LOCKOUT_SEC
+        int "Auth-failure lockout duration in seconds"
+        range 5 3600
+        default 60
+
+    config RW_SETUP_HOLD_MS
+        int "Button hold to enter setup mode (ms)"
+        default 5000
+
+    config RW_FACTORY_HOLD_MS
+        int "Button hold to factory reset (ms)"
+        default 15000
+
+endmenu

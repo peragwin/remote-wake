@@ -1,0 +1,4 @@
+# ESP32-C3: power-button-only profile (USB-Serial-JTAG only, no OTG device).
+CONFIG_IDF_TARGET="esp32c3"
+CONFIG_RW_PROFILE_POWER_ONLY=y
+CONFIG_RW_LED_GPIO=8

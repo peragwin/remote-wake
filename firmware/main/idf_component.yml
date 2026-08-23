@@ -1,0 +1,32 @@
+## Managed components pulled from the ESP Component Registry.
+## `idf.py build` fetches these automatically (no vendored sources).
+dependencies:
+  idf:
+    version: ">=5.2"
+
+  ## Ed25519. ESP-IDF's mbedtls (3.x) has no Ed25519/EdDSA implementation
+  ## at all — MBEDTLS_PK only speaks RSA and short-Weierstrass ECC — so the
+  ## signature check uses libsodium's crypto_sign_verify_detached.
+  espressif/libsodium:
+    version: "^1.0.20"
+
+  ## wss:// transport for the relay link.
+  espressif/esp_websocket_client:
+    version: "^1.2.0"
+
+  ## Renders the SoftAP credentials as a QR code on the serial console.
+  espressif/qrcode:
+    version: "^0.1.0"
+
+  ## WS2812 status LED over RMT.
+  espressif/led_strip:
+    version: "^2.5.5"
+    rules:
+      - if: "target not in [linux]"
+
+  ## USB HID keyboard. Only meaningful on SoCs with a USB-OTG device
+  ## peripheral; the power-button-only profile never references it.
+  espressif/esp_tinyusb:
+    version: "^1.4.2"
+    rules:
+      - if: "target in [esp32s2, esp32s3, esp32p4]"

@@ -1,0 +1,5 @@
+# Classic ESP32: power-button-only profile (no USB-OTG peripheral).
+CONFIG_IDF_TARGET="esp32"
+CONFIG_RW_PROFILE_POWER_ONLY=y
+# No on-board addressable LED on most classic ESP32 devkits.
+CONFIG_RW_LED_ENABLED=n
