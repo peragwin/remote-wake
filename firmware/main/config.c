@@ -64,14 +64,16 @@ static esp_err_t set_str(const char *key, const char *val)
     return err;
 }
 
+/* Slot indices are 0..3; the % 4 keeps gcc's value-range analysis (and thus
+ * -Werror=format-truncation) certain the output fits "x1".."x4" + NUL. */
 static void slot_key(int idx, char out[4])
 {
-    snprintf(out, 4, "k%d", idx + 1);
+    snprintf(out, 4, "k%u", (unsigned)idx % 4u + 1u);
 }
 
 static void ctr_key(int idx, char out[4])
 {
-    snprintf(out, 4, "c%d", idx + 1);
+    snprintf(out, 4, "c%u", (unsigned)idx % 4u + 1u);
 }
 
 /* ---------------------------------------------------------------- init -- */
@@ -354,7 +356,7 @@ esp_err_t rw_config_add_key(const uint8_t pubkey[32], const char *name,
     }
     nvs_close(h);
     if (err == ESP_OK) {
-        snprintf(kid_out, 4, "p%d", free_idx + 1);
+        snprintf(kid_out, 4, "p%u", (unsigned)free_idx % 4u + 1u);
         ESP_LOGI(TAG, "registered operator key in slot %s (%s)", kid_out,
                  slot.name);
     }
