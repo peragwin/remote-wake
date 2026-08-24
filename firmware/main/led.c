@@ -111,7 +111,8 @@ esp_err_t rw_led_init(void)
         .strip_gpio_num   = CONFIG_RW_LED_GPIO,
         .max_leds         = 1,
         .led_model        = LED_MODEL_WS2812,
-        .color_component_format = LED_STRIP_COLOR_COMPONENT_FMT_GRB,
+        /* GRB ordering is the WS2812 default; the explicit
+         * color_component_format field only exists in led_strip >= 3.0. */
         .flags = {
             .invert_out = false,
         },
