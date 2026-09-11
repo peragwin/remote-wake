@@ -168,7 +168,8 @@ static void ws_send_json(cJSON *obj)
         int n = esp_websocket_client_send_text(s_client, txt, (int)strlen(txt),
                                                pdMS_TO_TICKS(5000));
         if (n < 0) {
-            ESP_LOGW(TAG, "send failed");
+            ESP_LOGW(TAG, "send failed — marking link disconnected");
+            s_disconnected_evt = true;
         }
     }
     cJSON_free(txt);
@@ -574,6 +575,24 @@ static void drain_queue(void)
     }
 }
 
+static void teardown_client(void)
+{
+    if (s_client) {
+        if (esp_websocket_client_is_connected(s_client)) {
+            esp_websocket_client_close(s_client, pdMS_TO_TICKS(1000));
+        }
+        esp_websocket_client_stop(s_client);
+        esp_websocket_client_destroy(s_client);
+        s_client = NULL;
+    }
+    s_connected = false;
+    drain_queue();
+    asm_reset();
+}
+
+#define RELAY_DOWN_REBOOT_SEC  900 /* 15 minutes of network up but relay unreachable -> reboot recovery */
+static int64_t s_relay_down_since_us;
+
 static void relay_task(void *arg)
 {
     (void)arg;
@@ -592,9 +611,24 @@ static void relay_task(void *arg)
         esp_task_wdt_reset();
 
         if (!s_net_up) {
+            if (s_client) {
+                teardown_client();
+            }
             vTaskDelay(pdMS_TO_TICKS(500));
             continue;
         }
+
+        /* Watchdog: if network is up but relay connection fails continuously for >=15 min, reboot */
+        if (s_relay_down_since_us > 0) {
+            int64_t down_sec = (esp_timer_get_time() - s_relay_down_since_us) / 1000000LL;
+            if (down_sec >= RELAY_DOWN_REBOOT_SEC) {
+                ESP_LOGE(TAG, "relay unreachable for %lld s with network up — rebooting for recovery",
+                         (long long)down_sec);
+                vTaskDelay(pdMS_TO_TICKS(100));
+                esp_restart();
+            }
+        }
+
         sntp_start_once();
 
         if (rw_config_relay_ws_url(url, sizeof(url)) != ESP_OK) {
@@ -631,6 +665,9 @@ static void relay_task(void *arg)
         s_client = esp_websocket_client_init(&cfg);
         if (!s_client) {
             ESP_LOGE(TAG, "client init failed");
+            if (s_relay_down_since_us == 0) {
+                s_relay_down_since_us = esp_timer_get_time();
+            }
             goto backoff_delay;
         }
         esp_websocket_register_events(s_client, WEBSOCKET_EVENT_ANY,
@@ -641,17 +678,18 @@ static void relay_task(void *arg)
         }
 
         /* Wait for the handshake. */
-        for (int i = 0; i < 60 && !s_connected && !s_disconnected_evt; i++) {
+        for (int i = 0; i < 60 && !s_connected && !s_disconnected_evt && s_net_up; i++) {
             esp_task_wdt_reset();
             vTaskDelay(pdMS_TO_TICKS(250));
         }
         if (!s_connected) {
-            ESP_LOGW(TAG, "handshake timed out");
+            ESP_LOGW(TAG, "handshake timed out or aborted");
             goto teardown;
         }
 
         send_hello();
         backoff = BACKOFF_MIN_MS;   /* a good connection resets the ramp */
+        s_relay_down_since_us = 0;  /* connection succeeded, clear down timer */
         rw_led_set(locked_out() ? RW_LED_LOCKOUT : RW_LED_CONNECTED);
         s_last_rx_us = esp_timer_get_time();
         next_probe_us = s_last_rx_us + (int64_t)WS_PING_SEC * 1000000LL;
@@ -679,8 +717,12 @@ static void relay_task(void *arg)
             if (now_us >= next_probe_us) {
                 next_probe_us = now_us + (int64_t)WS_PING_SEC * 1000000LL;
                 if (s_client && esp_websocket_client_is_connected(s_client)) {
-                    esp_websocket_client_send_text(s_client, "ping", 4,
-                                                   pdMS_TO_TICKS(2000));
+                    int sent = esp_websocket_client_send_text(s_client, "ping", 4,
+                                                               pdMS_TO_TICKS(2000));
+                    if (sent < 0) {
+                        ESP_LOGW(TAG, "ping send failed — link broken");
+                        break;
+                    }
                 }
             }
             if (now_us - s_last_rx_us > (int64_t)RX_SILENCE_MS * 1000LL) {
@@ -703,12 +745,10 @@ static void relay_task(void *arg)
 
     teardown:
         rw_led_set(RW_LED_FAULT);
-        if (s_client) {
-            esp_websocket_client_close(s_client, pdMS_TO_TICKS(1000));
-            esp_websocket_client_destroy(s_client);
-            s_client = NULL;
+        if (s_relay_down_since_us == 0) {
+            s_relay_down_since_us = esp_timer_get_time();
         }
-        s_connected = false;
+        teardown_client();
 
     backoff_delay: {
         uint32_t wait_ms = jitter(backoff);
