@@ -15,6 +15,9 @@ set(RW_SRCS
     "led.c"
     "usb_hid.c"
     "maintenance.c"
+    "ota.c"
+    "ota_manifest.c"
+    "ota_journal.c"
 )
 
 list(TRANSFORM RW_SRCS PREPEND "${RW_SOURCE_DIR}/")
@@ -33,6 +36,11 @@ set(RW_REQUIRES
     qrcode
     driver
     efuse
+    app_update
+    esp_http_client
+    esp_partition
+    spi_flash
+    bootloader_support
     lwip
 )
 
@@ -41,6 +49,12 @@ set(RW_REQUIRES
 if(IDF_TARGET STREQUAL "esp32s2" OR IDF_TARGET STREQUAL "esp32s3" OR
    IDF_TARGET STREQUAL "esp32p4")
     list(APPEND RW_REQUIRES esp_tinyusb)
+
+endif()
+
+if(IDF_TARGET STREQUAL "esp32" OR IDF_TARGET STREQUAL "esp32s2" OR
+   IDF_TARGET STREQUAL "esp32s3" OR IDF_TARGET STREQUAL "esp32p4")
+    list(APPEND RW_REQUIRES esp_psram)
 endif()
 
 if(CONFIG_RW_LED_ENABLED)

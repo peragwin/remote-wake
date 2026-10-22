@@ -31,6 +31,9 @@ bool rw_relay_connected(void);
  * invalidates that connection, even if IP returns before the next task poll. */
 void rw_relay_notify_network(bool up);
 
+/** True only after this boot receives a sane SNTP synchronization callback. */
+bool rw_relay_clock_valid(void);
+
 /** Seconds remaining in the auth-failure lockout window, 0 when not locked. */
 int rw_relay_lockout_remaining(void);
 

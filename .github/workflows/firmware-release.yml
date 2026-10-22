@@ -1,0 +1,128 @@
+name: Publish signed firmware release
+
+# Deliberately no push trigger. A reviewed product build workflow calls this only
+# after its build/regression jobs upload a three-file release input artifact.
+on:
+  workflow_call:
+    inputs:
+      publisher_ref:
+        type: string
+        required: true
+      artifact_name:
+        type: string
+        required: true
+      release_tag:
+        type: string
+        required: true
+      key_id:
+        type: string
+        required: true
+      key_generation:
+        type: number
+        required: true
+      current_release:
+        type: number
+        required: true
+      channel_branch:
+        type: string
+        default: ota
+    secrets:
+      FIRMWARE_SIGNING_KEY_PEM:
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: firmware-publisher-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: firmware-publisher
+    permissions:
+      contents: write
+    steps:
+      - name: Require a pinned publisher commit
+        env:
+          PUBLISHER_REF: ${{ inputs.publisher_ref }}
+        run: '[[ "$PUBLISHER_REF" =~ ^[0-9a-f]{40}$ ]]'
+      # For an external embedding application the caller's checkout is its own
+      # repository. Fetch the reviewed tooling at the pinned reusable-workflow ref.
+      - name: Checkout publisher tooling
+        uses: actions/checkout@v4
+        with:
+          repository: peragwin/remote-wake
+          ref: ${{ inputs.publisher_ref }}
+          path: publisher-tooling
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install signing dependencies
+        run: python -m pip install -r publisher-tooling/tools/ota/requirements.txt
+      - name: Test publisher contract
+        run: PYTHONDONTWRITEBYTECODE=1 python -m unittest discover -s publisher-tooling/tools/ota/tests -v
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: release-input
+      - name: Prepare protected publisher key
+        env:
+          FIRMWARE_SIGNING_KEY_PEM: ${{ secrets.FIRMWARE_SIGNING_KEY_PEM }}
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          from cryptography.hazmat.primitives import serialization
+          from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+          raw = os.environ['FIRMWARE_SIGNING_KEY_PEM'].encode()
+          key = serialization.load_pem_private_key(raw, password=None)
+          if not isinstance(key, Ed25519PrivateKey):
+              raise SystemExit('Publisher key must be Ed25519')
+          path = Path(os.environ['RUNNER_TEMP']) / 'firmware-publisher.pem'
+          descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+          with os.fdopen(descriptor, 'wb') as output:
+              output.write(raw)
+          public = key.public_key().public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
+          (Path(os.environ['RUNNER_TEMP']) / 'firmware-publisher-public.pem').write_bytes(public)
+          PY
+      - name: Sign and verify the complete application
+        env:
+          KEY_ID: ${{ inputs.key_id }}
+          KEY_GENERATION: ${{ inputs.key_generation }}
+          CURRENT_RELEASE: ${{ inputs.current_release }}
+        run: |
+          python publisher-tooling/tools/ota/manifest.py sign \
+            --key "$RUNNER_TEMP/firmware-publisher.pem" --kid "$KEY_ID" \
+            --key-generation "$KEY_GENERATION" --current-release "$CURRENT_RELEASE" \
+            --identity release-input/identity.json --payload release-input/payload.json \
+            --image release-input/app.bin --output release-input/manifest.json \
+            --source-prefix "https://github.com/$GITHUB_REPOSITORY/releases/download/"
+          python publisher-tooling/tools/ota/manifest.py verify \
+            --key "$RUNNER_TEMP/firmware-publisher-public.pem" --kid "$KEY_ID" \
+            --key-generation "$KEY_GENERATION" --current-release "$CURRENT_RELEASE" \
+            --identity release-input/identity.json --manifest release-input/manifest.json \
+            --image release-input/app.bin \
+            --source-prefix "https://github.com/$GITHUB_REPOSITORY/releases/download/"
+      - name: Publish versioned assets then promote channel
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEY_ID: ${{ inputs.key_id }}
+          KEY_GENERATION: ${{ inputs.key_generation }}
+          CURRENT_RELEASE: ${{ inputs.current_release }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          CHANNEL_BRANCH: ${{ inputs.channel_branch }}
+        run: |
+          python publisher-tooling/tools/ota/publish.py \
+            --public-key "$RUNNER_TEMP/firmware-publisher-public.pem" --kid "$KEY_ID" \
+            --key-generation "$KEY_GENERATION" --current-release "$CURRENT_RELEASE" \
+            --identity release-input/identity.json --manifest release-input/manifest.json \
+            --image release-input/app.bin --repository "$GITHUB_REPOSITORY" \
+            --tag "$RELEASE_TAG" --channel-branch "$CHANNEL_BRANCH" \
+            --source-prefix "https://github.com/$GITHUB_REPOSITORY/releases/download/" --publish
+      - name: Remove temporary private key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/firmware-publisher.pem" "$RUNNER_TEMP/firmware-publisher-public.pem"

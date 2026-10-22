@@ -52,8 +52,9 @@ Chip support: **ESP32-S3** (full: USB HID + GPIO). Classic ESP32 / ESP32-C3
 have no usable USB OTG — they build in a *power-button-only* profile.
 
 For use inside another application, see the [embedding guide](docs/embedding.md).
-The [firmware update plan](docs/updates.md) defines shared update machinery and
-application-specific release identity; OTA is planned, not implemented yet.
+The [firmware update guide](docs/updates.md) covers the opt-in signed OTA updater,
+application-specific release identity and commissioning. No publisher is trusted
+until the application explicitly configures one.
 
 ## Deployment
 

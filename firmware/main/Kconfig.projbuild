@@ -1,0 +1,41 @@
+menu "Application firmware releases"
+    depends on RW_OTA_ENABLED
+    config APP_OTA_BOARD
+        string "Board identity"
+        default "esp32-c3" if IDF_TARGET_ESP32C3
+        default "esp32" if IDF_TARGET_ESP32
+        default "esp32-s3-devkitc"
+    config APP_OTA_PROFILE
+        string "Hardware profile identity"
+        default "power-only" if RW_PROFILE_POWER_ONLY
+        default "hid-power"
+    config APP_OTA_CHANNEL
+        string "Release channel"
+        default "stable"
+    config APP_OTA_RELEASE
+        int "Monotonic release counter"
+        range 1 2147483647
+        default 1
+    config APP_OTA_MANIFEST_URL
+        string "Signed channel manifest HTTPS URL"
+        default ""
+    config APP_OTA_SOURCE_PREFIX
+        string "Allowed HTTPS release repository/path prefix (ending /)"
+        default ""
+    config APP_OTA_KEY_ID
+        string "Trusted publisher key ID"
+        default "publisher-1"
+    config APP_OTA_KEY_GENERATION
+        int "Publisher key generation"
+        range 1 2147483647
+        default 1
+    config APP_OTA_PUBLIC_KEY_HEX
+        string "Publisher Ed25519 PUBLIC key (64 hex characters)"
+        default ""
+        help
+            Never put a signing private key in firmware. Empty source/key fields
+            enable boot health only; no downloads or update registration occur.
+    config APP_OTA_AUTO
+        bool "Automatically install matching signed releases"
+        default n
+endmenu

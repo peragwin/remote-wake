@@ -54,7 +54,8 @@ void esp_restart(void);
 uint32_t esp_random(void);
 esp_err_t esp_crt_bundle_attach(void *conf);
 
-typedef struct { int unused; } esp_sntp_config_t;
+struct timeval;
+typedef struct { void (*sync_cb)(struct timeval *); } esp_sntp_config_t;
 #define ESP_NETIF_SNTP_DEFAULT_CONFIG(server) ((esp_sntp_config_t){0})
 esp_err_t esp_netif_sntp_init(const esp_sntp_config_t *config);
 typedef struct { int rssi; } wifi_ap_record_t;
@@ -97,7 +98,10 @@ bool esp_websocket_client_is_connected(esp_websocket_client_handle_t client);
 int esp_websocket_client_send_text(esp_websocket_client_handle_t client, const char *text,
                                  int len, TickType_t timeout);
 
-typedef struct cJSON { double valuedouble; char *valuestring; int type; } cJSON;
+#ifdef RW_RELAY_REAL_JSON
+#include RW_RELAY_CJSON_HEADER
+#else
+typedef struct cJSON { double valuedouble; char *valuestring; int type; struct cJSON *child,*next; char *string; } cJSON;
 cJSON *cJSON_CreateObject(void);
 void cJSON_Delete(cJSON *item);
 void cJSON_free(void *item);
@@ -114,3 +118,5 @@ void cJSON_AddNumberToObject(cJSON *item, const char *name, double value);
 void cJSON_AddStringToObject(cJSON *item, const char *name, const char *value);
 void cJSON_AddBoolToObject(cJSON *item, const char *name, bool value);
 void cJSON_AddItemToObject(cJSON *item, const char *name, cJSON *value);
+
+#endif

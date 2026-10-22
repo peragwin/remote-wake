@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include "auth.h"
+#include "ota_app.h"
 #include "config.h"
 #include "driver/gpio.h"
 #include "esp_attr.h"
@@ -40,6 +41,17 @@ static const char *TAG = "rw.main";
 static RTC_NOINIT_ATTR uint32_t s_boot_to_setup;
 
 static bool s_setup_mode;
+esp_err_t app_ota_prepare_restart(void *ctx)
+{
+    (void)ctx;
+    return ESP_OK; /* Shared updater reserves HID and physical power actions. */
+}
+void app_ota_progress(void *ctx, const rw_ota_status_t *status)
+{
+    (void)ctx;
+    ESP_LOGI(TAG, "update %s", rw_ota_phase_name(status->phase));
+}
+
 /* ----------------------------------------------------------- boot button -- */
 
 static void reboot_into_setup(void)
@@ -117,16 +129,13 @@ void app_main(void)
 
     /* 3. NVS + settings. */
     esp_err_t err = nvs_flash_init();
-    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_LOGW(TAG, "NVS needs erasing");
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        err = nvs_flash_init();
-    }
+    /* A rollback must retain pairing/replay state; never erase NVS on init failure. */
     ESP_ERROR_CHECK(err);
     ESP_ERROR_CHECK(rw_config_init());
 
     /* 4. Crypto. */
     ESP_ERROR_CHECK(rw_auth_init());
+    ESP_ERROR_CHECK(app_ota_start());
 
     /* Decide the mode before touching the radio. The RTC variable is only
      * meaningful after a software restart — after a cold boot it holds
@@ -151,6 +160,7 @@ void app_main(void)
                  requested ? "button" : "not provisioned");
         rw_led_set(RW_LED_SETUP);
         ESP_ERROR_CHECK(rw_prov_start());
+        ESP_ERROR_CHECK(rw_ota_confirm_healthy());
         /* The HTTP server owns the device from here; nothing else runs. In
          * particular the USB HID interface stays down and the relay client is
          * never started, so no command path exists in setup mode. */
@@ -159,6 +169,7 @@ void app_main(void)
 
     /* 7. Normal mode. */
     err = rw_hid_init();
+    bool usb_healthy = err == ESP_OK;
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "USB HID init failed: %s — keyboard actions will report "
                       "usb_down", esp_err_to_name(err));
@@ -176,6 +187,9 @@ void app_main(void)
         rw_led_set(RW_LED_FAULT);
         return;
     }
+
+    if (usb_healthy) ESP_ERROR_CHECK(rw_ota_confirm_healthy());
+    else (void)rw_ota_reject_unhealthy();
 
     ESP_LOGI(TAG, "deviceId %s, %d operator key(s) registered",
              rw_config_device_id(), rw_config_key_count());

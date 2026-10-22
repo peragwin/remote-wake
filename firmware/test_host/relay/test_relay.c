@@ -16,6 +16,14 @@ static int mock_wdt_feeds;
 static int mock_restarts;
 static int mock_actions;
 static esp_err_t mock_power_result;
+static bool mock_ota_enabled;
+static unsigned mock_ota_offers;
+static char mock_ota_url[RW_OTA_URL_MAX + 1];
+static char mock_sent[4097];
+static rw_ota_registration_t mock_registration = {
+    .product="remote-wake", .board="esp32-s3", .profile="hid-power", .channel="stable",
+    .partition_layout="rw-4m-ab-v1", .version="1.0.0", .release_counter=1, .updater_api=1,
+};
 static bool mock_power_dispatch;
 static char mock_error[32];
 static esp_err_t mock_wdt_add_result;
@@ -53,6 +61,7 @@ static void reset(void)
     drain_queue();
     asm_reset();
     s_link = (rw_link_state_t){0};
+    s_clock_synchronized = false;
     s_client = NULL;
     s_rx_queue = &mock_queue;
     s_lock_until_us = 0;
@@ -65,6 +74,7 @@ static void reset(void)
     mock_send_calls = mock_stop_calls = mock_destroy_calls = 0;
     mock_wdt_feeds = mock_restarts = mock_actions = mock_verify_calls = 0;
     mock_wdt_add_result = ESP_OK;
+    mock_ota_enabled=false;mock_ota_offers=0;mock_sent[0]=mock_ota_url[0]=0;
     mock_auto_connect = true;
     mock_drop_in_verify = mock_drop_on_receive = false;
     mock_stall_stop = mock_stall_send = false;
@@ -282,9 +292,69 @@ static void test_disabled_power_dispatch(void)
     mock_power_result = ESP_OK;
 }
 
+#ifdef RW_RELAY_REAL_JSON
+static void test_update_metadata(void)
+{
+    reset();uint32_t session=connect();
+    assert(send_hello());
+    cJSON *root=cJSON_Parse(mock_sent);
+    assert(root && !cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItem(root,"hello"),"update"));
+    cJSON_Delete(root);
+    mock_ota_enabled=true;
+    assert(send_hello());root=cJSON_Parse(mock_sent);
+    cJSON *update=cJSON_GetObjectItem(cJSON_GetObjectItem(root,"hello"),"update");
+    assert(update && cJSON_GetObjectItem(update,"release_counter")->valuedouble==1);
+    assert(!strcmp(cJSON_GetObjectItem(update,"partition_layout")->valuestring,"rw-4m-ab-v1"));
+    cJSON_Delete(root);
+    const char *valid="{\"update_available\":{\"v\":1,\"product\":\"remote-wake\",\"board\":\"esp32-s3\",\"profile\":\"hid-power\",\"channel\":\"stable\",\"partition_layout\":\"rw-4m-ab-v1\",\"manifest_url\":\"https://github.com/example/fw/releases/download/v2/manifest.json\"}}";
+    frame(session,1,true,valid,(int)strlen(valid),(int)strlen(valid),0);
+    assert(mock_ota_offers==0 && mock_queued==1); // callback only enqueues
+    rw_rx_msg_t hint_message;
+    assert(xQueueReceive(s_rx_queue,&hint_message,0)==pdTRUE);
+    assert(handle_update_hint(hint_message.data,hint_message.len,hint_message.session));
+    free(hint_message.data);assert(mock_ota_offers==1);
+    assert(strstr(mock_ota_url,"/manifest.json"));assert(mock_actions==0 && mock_verify_calls==0);
+    const char *fields[]={"product","board","profile","channel","partition_layout","v","manifest_url"};
+    for(unsigned i=0;i<sizeof(fields)/sizeof(fields[0]);i++){
+        root=cJSON_Parse(valid);update=cJSON_GetObjectItem(root,"update_available");
+        cJSON_ReplaceItemInObjectCaseSensitive(update,fields[i],!strcmp(fields[i],"manifest_url")?cJSON_CreateNumber(1):cJSON_CreateString("wrong"));
+        char *bad=cJSON_PrintUnformatted(root);unsigned count=mock_ota_offers;
+        assert(handle_update_hint(bad,strlen(bad),session));assert(mock_ota_offers==count);
+        free(bad);cJSON_Delete(root);
+    }
+    root=cJSON_Parse(valid);update=cJSON_GetObjectItem(root,"update_available");
+    cJSON_AddStringToObject(update,"product","remote-wake");
+    char *duplicate=cJSON_PrintUnformatted(root);
+    assert(handle_update_hint(duplicate,strlen(duplicate),session));assert(mock_ota_offers==1);
+    free(duplicate);cJSON_Delete(root);
+    root=cJSON_Parse(valid);update=cJSON_GetObjectItem(root,"update_available");
+    char too_long[RW_OTA_URL_MAX+2];memset(too_long,'x',sizeof(too_long)-1);too_long[sizeof(too_long)-1]=0;
+    cJSON_ReplaceItemInObjectCaseSensitive(update,"manifest_url",cJSON_CreateString(too_long));
+    char *large=cJSON_PrintUnformatted(root);
+    assert(handle_update_hint(large,strlen(large),session));assert(mock_ota_offers==1);
+    free(large);cJSON_Delete(root);
+    mock_ota_enabled=false;assert(handle_update_hint(valid,strlen(valid),session));assert(mock_ota_offers==1);
+    mock_ota_enabled=true;rw_relay_notify_network(false);rw_relay_notify_network(true);
+    assert(handle_update_hint(valid,strlen(valid),session));assert(mock_ota_offers==1);
+}
+#endif
+
+static void test_clock_sync(void)
+{
+    reset();assert(!rw_relay_clock_valid());
+    struct timeval tv={.tv_sec=CLOCK_SANE_EPOCH+1000};
+    clock_synchronized(&tv);assert(rw_relay_clock_valid());
+    tv.tv_sec=1;clock_synchronized(&tv);assert(!rw_relay_clock_valid());
+    clock_synchronized(NULL);assert(!rw_relay_clock_valid());
+}
+
 int main(void)
 {
     s_rx_queue = &mock_queue;
+    test_clock_sync();
+#ifdef RW_RELAY_REAL_JSON
+    test_update_metadata();
+#else
     test_disabled_power_dispatch();
     test_fragmentation();
     test_drop_entire_bad_message();
@@ -292,6 +362,7 @@ int main(void)
     test_sends_and_dispatch_race();
     test_task_recovery();
     test_queue_loss_before_dispatch();
+#endif
     drain_queue();
     free(s_asm);
     puts("relay host tests passed");
@@ -376,6 +447,7 @@ bool esp_websocket_client_is_connected(esp_websocket_client_handle_t client) { r
 int esp_websocket_client_send_text(esp_websocket_client_handle_t client, const char *text,
                                  int len, TickType_t timeout)
 {
+    snprintf(mock_sent,sizeof(mock_sent),"%.*s",len,text);
     ++mock_send_calls;
     if (mock_stall_send) { watchdog_stall(); }
     return mock_send == INT_MAX ? len : mock_send;
@@ -383,6 +455,7 @@ int esp_websocket_client_send_text(esp_websocket_client_handle_t client, const c
 
 /* The JSON/auth mocks isolate transport policy; production auth has its own
  * signing-vector tests. Only the wake dispatch side effect is observed here. */
+#ifndef RW_RELAY_REAL_JSON
 cJSON *cJSON_CreateObject(void) { return calloc(1, sizeof(cJSON)); }
 void cJSON_Delete(cJSON *item) { free(item); }
 void cJSON_free(void *item) { free(item); }
@@ -401,6 +474,7 @@ void cJSON_AddStringToObject(cJSON *item, const char *name, const char *value)
 { if (!strcmp(name, "err")) snprintf(mock_error, sizeof(mock_error), "%s", value); }
 void cJSON_AddBoolToObject(cJSON *item, const char *name, bool value) { }
 void cJSON_AddItemToObject(cJSON *item, const char *name, cJSON *value) { free(value); }
+#endif
 bool rw_config_get_key(const char *kid, uint8_t out[32]) { return true; }
 bool rw_config_get_ctr(const char *kid, uint64_t *out) { *out = 0; return true; }
 esp_err_t rw_config_set_ctr(const char *kid, uint64_t ctr) { return ESP_OK; }
@@ -428,3 +502,7 @@ esp_err_t rw_hid_type(const char *text, bool enter) { ++mock_actions; return ESP
 esp_err_t rw_hid_keys(const cJSON *seq) { ++mock_actions; return ESP_OK; }
 esp_err_t rw_power_tap(uint32_t ms) { ++mock_actions; return mock_power_result; }
 esp_err_t rw_power_hold(uint32_t ms) { ++mock_actions; return mock_power_result; }
+
+/* OTA is disabled unless a test explicitly configures registration. */
+bool rw_ota_get_registration(rw_ota_registration_t *out) { if(!mock_ota_enabled)return false;*out=mock_registration;return true; }
+esp_err_t rw_ota_offer_manifest(const char *url) { ++mock_ota_offers;snprintf(mock_ota_url,sizeof(mock_ota_url),"%s",url);return ESP_OK; }

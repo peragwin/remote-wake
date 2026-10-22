@@ -185,3 +185,19 @@ Off by default for development. For deployment enable, in this order:
 `CONFIG_SECURE_BOOT_V2_ENABLED`, `CONFIG_SECURE_FLASH_ENC_ENABLED`
 (release mode), and `CONFIG_NVS_ENCRYPTION` with an `nvs_keys` partition — the
 device token and the operator public keys live in NVS. See `docs/security.md`.
+
+
+## Optional signed OTA
+
+The default build still uses one factory slot. For A/B, use the
+`sdkconfig.ota.defaults` overlay with fresh sdkconfig and follow the
+[update commissioning guide](../docs/updates.md). Do not erase pairing/replay NVS
+or migrate partitions through an app-only OTA. Standalone startup now fails on
+NVS initialization errors instead of automatically erasing settings.
+
+The app supplies board/profile/channel, version/release, publisher public key
+and allowed source through `APP_OTA_*` configuration. An empty key/source starts
+boot-health-only mode. No release is downloaded until explicitly enrolled.
+The public component supports automatic, notify-only and pinned policies; the
+standalone adapter defaults to notify-only when configured. Network absence
+alone is not a boot health failure.

@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <sys/time.h>
 
 #include "auth.h"
 #include "cJSON.h"
@@ -22,6 +23,7 @@
 #include "freertos/task.h"
 #include "led.h"
 #include "power_btn.h"
+#include "ota.h"
 #include "sdkconfig.h"
 #include "usb_hid.h"
 
@@ -70,6 +72,7 @@ static QueueHandle_t s_rx_queue;
 static portMUX_TYPE s_state_mux = portMUX_INITIALIZER_UNLOCKED;
 static rw_link_state_t s_link;
 static uint32_t s_next_session; /* relay task only; zero means no session */
+static bool s_clock_synchronized; /* protected by s_state_mux */
 static bool s_sntp_started;     /* relay task only */
 
 static rw_link_state_t link_snapshot(void)
@@ -138,9 +141,19 @@ static int64_t now_unix(void)
     return (int64_t)time(NULL);
 }
 
-static bool clock_valid(void)
+bool rw_relay_clock_valid(void)
 {
-    return now_unix() > CLOCK_SANE_EPOCH;
+    portENTER_CRITICAL(&s_state_mux);
+    bool synchronized = s_clock_synchronized;
+    portEXIT_CRITICAL(&s_state_mux);
+    return synchronized && now_unix() > CLOCK_SANE_EPOCH;
+}
+
+static void clock_synchronized(struct timeval *tv)
+{
+    portENTER_CRITICAL(&s_state_mux);
+    s_clock_synchronized = tv && tv->tv_sec > CLOCK_SANE_EPOCH;
+    portEXIT_CRITICAL(&s_state_mux);
 }
 
 static void sntp_start_once(void)
@@ -151,6 +164,7 @@ static void sntp_start_once(void)
     /* The default config already sets start = true and smooth sync off, which
      * is what we want: the ts window needs a step-corrected clock fast. */
     esp_sntp_config_t cfg = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
+    cfg.sync_cb = clock_synchronized;
     esp_err_t err = esp_netif_sntp_init(&cfg);
     if (err == ESP_OK || err == ESP_ERR_INVALID_STATE) {
         s_sntp_started = true;
@@ -443,8 +457,9 @@ static void dispatch(const rw_cmd_t *cmd)
  * The relay's 25 s keepalive is an application-layer text frame
  * ({"v":1,"ping":<unix>}), not an RFC 6455 control ping, because Cloudflare
  * Workers cannot emit those. Anything that is not a command envelope — i.e.
- * lacks a string `id` and a string `act` — is silently ignored; it still
- * counts as liveness evidence (recorded by the caller).
+ * lacks a string `id` and a string `act` — cannot enter command dispatch.
+ * Bounded update hints are handled separately; other frames are ignored and
+ * still count as liveness evidence (recorded by the caller).
  */
 static bool looks_like_command(const char *json, size_t len)
 {
@@ -463,6 +478,50 @@ static bool looks_like_command(const char *json, size_t len)
     return ok;
 }
 
+/* Hints never enter authenticated keyboard dispatch. This runs on the relay
+ * task after the existing bounded/session-fenced RX queue, not the network
+ * callback. The OTA API copies a hint to its own bounded worker queue. */
+static bool unique_object(const cJSON *object)
+{
+    if (!cJSON_IsObject(object)) return false;
+    for (const cJSON *a = object->child; a; a = a->next) {
+        if (!a->string) return false;
+        for (const cJSON *b = a->next; b; b = b->next) {
+            if (!b->string || !strcmp(a->string, b->string)) return false;
+        }
+    }
+    return true;
+}
+
+static bool hint_matches(const cJSON *hint, const char *field, const char *expected)
+{
+    const cJSON *item = cJSON_GetObjectItemCaseSensitive(hint, field);
+    return cJSON_IsString(item) && item->valuestring && !strcmp(item->valuestring, expected);
+}
+
+static bool handle_update_hint(const char *json, size_t len, uint32_t session)
+{
+    if (!json || !len || json[0] != '{') return false;
+    cJSON *root = cJSON_ParseWithLength(json, len);
+    const cJSON *hint = cJSON_GetObjectItemCaseSensitive(root, "update_available");
+    if (!hint) { cJSON_Delete(root); return false; }
+    rw_ota_registration_t device;
+    const cJSON *v = cJSON_GetObjectItemCaseSensitive(hint, "v");
+    const cJSON *url = cJSON_GetObjectItemCaseSensitive(hint, "manifest_url");
+    if (unique_object(root) && unique_object(hint) && cJSON_IsNumber(v) && v->valuedouble == 1 &&
+        cJSON_IsString(url) && url->valuestring && url->valuestring[0] &&
+        strnlen(url->valuestring, RW_OTA_URL_MAX + 1) <= RW_OTA_URL_MAX &&
+        rw_ota_get_registration(&device) &&
+        hint_matches(hint, "product", device.product) && hint_matches(hint, "board", device.board) &&
+        hint_matches(hint, "profile", device.profile) && hint_matches(hint, "channel", device.channel) &&
+        hint_matches(hint, "partition_layout", device.partition_layout) && session_valid(session)) {
+        // Source allowlist, signature, monotonicity and compatibility live in OTA.
+        (void)rw_ota_offer_manifest(url->valuestring);
+    }
+    cJSON_Delete(root);
+    return true;
+}
+
 static void handle_envelope(const char *json, size_t len, uint32_t session)
 {
     char peek_id[RW_ID_MAXLEN] = {0};
@@ -479,7 +538,7 @@ static void handle_envelope(const char *json, size_t len, uint32_t session)
         .device_id   = rw_config_device_id(),
         .now         = now_unix(),
         .ts_window   = CONFIG_RW_TS_WINDOW_SEC,
-        .clock_valid = clock_valid(),
+        .clock_valid = rw_relay_clock_valid(),
         .ctx         = NULL,
         .get_key     = ops_get_key,
         .get_ctr     = ops_get_ctr,
@@ -697,6 +756,21 @@ static bool send_hello(void)
         return false;
     }
     cJSON_AddStringToObject(h, "fw", RW_FW_VERSION);
+    rw_ota_registration_t identity;
+    if (rw_ota_get_registration(&identity)) {
+        cJSON *update = cJSON_CreateObject();
+        if (!update) { cJSON_Delete(o); cJSON_Delete(h); return false; }
+        cJSON_AddNumberToObject(update, "v", 1);
+        cJSON_AddNumberToObject(update, "updater_api", identity.updater_api);
+        cJSON_AddStringToObject(update, "product", identity.product);
+        cJSON_AddStringToObject(update, "board", identity.board);
+        cJSON_AddStringToObject(update, "profile", identity.profile);
+        cJSON_AddStringToObject(update, "channel", identity.channel);
+        cJSON_AddStringToObject(update, "partition_layout", identity.partition_layout);
+        cJSON_AddStringToObject(update, "version", identity.version);
+        cJSON_AddNumberToObject(update, "release_counter", identity.release_counter);
+        cJSON_AddItemToObject(h, "update", update);
+    }
     cJSON_AddItemToObject(o, "hello", h);
     bool sent = ws_send_json(o);
     if (sent) {
@@ -876,6 +950,8 @@ static void relay_task(void *arg)
                     /* A message queued before IP loss cannot run on its return. */
                 } else if (looks_like_command(msg.data, msg.len)) {
                     handle_envelope(msg.data, msg.len, msg.session);
+                } else if (handle_update_hint(msg.data, msg.len, msg.session)) {
+                    /* Unsigned advisory metadata, never a wake/power command. */
                 } else {
                     /* Relay keepalive ({"v":1,"ping":...}) or our own "pong".
                      * Not a command; the callback already counted it. */

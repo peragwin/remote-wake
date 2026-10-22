@@ -8,3 +8,16 @@ trap 'rm -rf "$build_dir"' EXIT
     -fsanitize=address,undefined -fno-omit-frame-pointer -g \
     -Iinclude test_relay.c -o "$build_dir/test_relay"
 ASAN_OPTIONS="detect_leaks=0${ASAN_OPTIONS:+:$ASAN_OPTIONS}" "$build_dir/test_relay"
+
+# Exercise production hint parsing and hello serialization with real cJSON,
+# separately from the deterministic transport mocks above.
+if [[ -n "${CJSON_DIR:-}" ]]; then
+    json_flags=(-DRW_RELAY_CJSON_HEADER="\"$CJSON_DIR/cJSON.h\"" "$CJSON_DIR/cJSON.c")
+else
+    json_flags=(-DRW_RELAY_CJSON_HEADER='<cjson/cJSON.h>' -lcjson)
+fi
+"${CC:-cc}" -std=c11 -D_POSIX_C_SOURCE=200809L -DRW_RELAY_REAL_JSON \
+    -Wall -Wextra -Werror -Wno-unused-function -Wno-unused-variable -Wno-unused-parameter -pthread \
+    -fsanitize=address,undefined -fno-omit-frame-pointer -g \
+    -Iinclude test_relay.c "${json_flags[@]}" -o "$build_dir/test_update_hints"
+ASAN_OPTIONS="detect_leaks=0${ASAN_OPTIONS:+:$ASAN_OPTIONS}" "$build_dir/test_update_hints"

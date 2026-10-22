@@ -129,3 +129,55 @@ src/ratelimit.ts token bucket
 src/http.ts      JSON responses, bearer extraction
 test/            vitest: unit tests + integration tests against real workerd
 ```
+
+## Optional OTA release hints
+
+Release discovery is disabled by default. Operators may set two non-secret
+Worker variables in their deployment configuration:
+
+```toml
+[vars]
+UPDATE_CATALOG_URL = "https://raw.githubusercontent.com/OWNER/REPO/ota-channels/catalog.json"
+UPDATE_ALLOWED_REPOS = "OWNER/REPO"
+```
+
+Do not put GitHub tokens in these values. The source is public metadata; neither
+relay nor device needs a GitHub credential. The allowlist accepts at most 32
+comma-separated `OWNER/REPO` entries. The catalog URL must be HTTPS on
+`raw.githubusercontent.com` within an allowed repository, or a versioned GitHub
+release asset. Redirects are rejected, so raw GitHub is the practical catalog
+endpoint. No device-supplied URL is fetched.
+
+The bounded catalog format is:
+
+```json
+{"v":1,"releases":[{"product":"remote-wake","board":"esp32-s3-devkitc","profile":"hid-power","channel":"stable","partition_layout":"rw-4m-ab-v1","version":"1.1.0","release_counter":2,"manifest_url":"https://github.com/OWNER/REPO/releases/download/v1.1.0/manifest.json"}]}
+```
+
+It permits at most 64 releases and 64 KiB. Identity strings contain ASCII
+letters, digits, `.`, `_` or `-`, beginning with a letter or digit. Maximum
+lengths are product 31, board 31, profile 47, channel 15, partition layout 31,
+and version 31 characters. Counters are unsigned 32-bit integers; versions are
+human labels and are never sorted. Manifest URLs are at most 511 bytes and must
+refer to versioned `https://github.com/OWNER/REPO/releases/download/TAG/ASSET`
+locations within the allowlist, with no credentials, query, fragment or custom
+port. Signed manifest fields `layout` and `release` map to catalog
+`partition_layout` and `release_counter` respectively.
+
+Configured devices add `hello.update` with `v:1`, `updater_api:1`, the complete
+identity tuple, application version and release counter. Only a strictly newer
+matching tuple produces `{ "update_available": { "v":1, ...release } }`. Old
+clients remain unchanged. WebSocket attachments retain registration and check
+state through hibernation. A source check is limited to once per five minutes
+per connected device, with a 30-second floor for repeated registration frames.
+Public validated metadata is shared through the Cache API for 120 seconds.
+Fetches time out after five seconds and cancel oversized streams immediately.
+Catalog failures leave the keyboard command channel operating normally.
+
+Announcements are unsigned advisory metadata, separate from authenticated
+keyboard/power commands. The device's application-supplied source policy and
+publisher signature verification remain authoritative. The relay never serves
+firmware binaries or supplies signing keys. Matching newer releases are announced again on each five-minute refresh, so
+a hint dropped by a busy updater can recover; reconnecting devices also receive
+the current matching release. No deployment or channel promotion happens merely by
+building this code.

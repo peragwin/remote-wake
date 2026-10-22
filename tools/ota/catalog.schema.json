@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Relay release catalog v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "v",
+    "releases"
+  ],
+  "properties": {
+    "v": {
+      "type": "integer",
+      "const": 1
+    },
+    "releases": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "board",
+          "channel",
+          "manifest_url",
+          "partition_layout",
+          "product",
+          "profile",
+          "release_counter",
+          "version"
+        ],
+        "properties": {
+          "product": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 31,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+          },
+          "board": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 31,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+          },
+          "profile": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 47,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+          },
+          "channel": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 15,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+          },
+          "partition_layout": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 31,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+          },
+          "version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 31,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+          },
+          "release_counter": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4294967295
+          },
+          "manifest_url": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 511,
+            "pattern": "^https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/releases/download/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+          }
+        }
+      }
+    }
+  },
+  "$comment": "Total decoded JSON bound65536 bytes, duplicate tuple/key rejection and operator repository allowlist must be enforced separately. Catalog is an unsigned hint; manifest signature is authoritative."
+}

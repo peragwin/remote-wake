@@ -1,13 +1,15 @@
 # Firmware updates and the embedding boundary
 
-Status: proposed OTA design, 2026-10-22. The local ROM-bootloader maintenance
-API is implemented and host-tested separately; physical integration is pending.
-There is no automatic network updater,
-release-signing pipeline or update-announcement service yet.
+Status: implementation in local review, 2026-10-22. The shared updater,
+signed-release tooling, application adapters and relay announcements are implemented.
+They are opt-in and have not been published or deployed. Production publisher keys,
+release repositories/catalogs and device enrollment still need commissioning.
+Local ROM entry is physically verified on Voidstats, including a complete software-only
+flash cycle. OTA hardware/bootstrap validation is tracked separately from host tests.
 
 ## Ownership
 
-The proposed `remote-wake` feature is a reusable **whole-application updater**. It never tries
+`remote-wake` provides a reusable **whole-application updater**. It never tries
 to replace its own component inside a linked firmware image. An embedding app
 supplies identity, release source, trusted publisher keys, partition layout and
 application health checks. Updating the dependency means building and releasing
@@ -18,7 +20,7 @@ a new complete application.
 | remote-wake component | Bounded update state machine, manifest verification, HTTPS streaming, inactive-slot installation, restart coordination, rollback bookkeeping and progress/status API |
 | Standalone remote-wake app | Its product/board/profile identity, partitions, public release keys, default update policy and boot health |
 | Embedding app such as Voidstats | Its own identity, partitions, release keys/repository, local display/progress UI, restart preparation and health checks |
-| Relay | Advertise matching releases on connect and when a channel changes; cache metadata and report progress |
+| Relay | Advertise matching releases on connect and periodic refresh; cache public metadata |
 | Publisher CI | Build each complete image, test it, publish GitHub release assets and signed manifests, then promote the channel |
 
 This keeps the public base useful to other projects without baking Voidwell,
@@ -72,13 +74,12 @@ Public release assets require no GitHub token on a device. The downloader must
 handle bounded HTTPS redirects while continuing TLS verification; GitHub's
 release-asset endpoint can return either the content or a redirect.
 
-Current relay code ignores unsolicited device hello metadata other than pending
-command responses. Implementation must explicitly add bounded capability/identity
-registration and versioned update announcements. Do not reinterpret an unsigned
-announcement as one of the existing authenticated keyboard/power commands. Old
-devices continue operating and simply do not advertise update support.
+The relay accepts bounded `hello.update` identity registration and sends versioned
+update hints, refreshed every five minutes while connected. Old devices continue
+operating without update registration. Hints never enter authenticated keyboard/
+power dispatch. See [relay configuration](../relay/README.md) for the catalog contract.
 
-Proposed announcement shape (not implemented protocol):
+Announcement shape:
 
 ```json
 {
@@ -88,6 +89,9 @@ Proposed announcement shape (not implemented protocol):
     "board": "lilygo-t-display-s3",
     "profile": "st7789-gc9a01-v1",
     "channel": "stable",
+    "partition_layout": "vs-16m-ab-v1",
+    "version": "0.2.0",
+    "release_counter": 2,
     "manifest_url": "https://github.com/OWNER/REPO/releases/download/v0.2.0/voidstats-manifest.json"
   }
 }
@@ -130,9 +134,9 @@ trust roots solely from the relay.
 
 ## Installation, rollback and policy
 
-Proposed public API: initialize with application-supplied configuration, offer a
-manifest, read a bounded status snapshot, subscribe to progress, prepare for
-restart, and report application health after boot. Callbacks must not perform
+The API in `ota.h` initializes application-supplied configuration, accepts a
+manifest URL hint, exposes a bounded status snapshot and worker progress callback,
+coordinates restart preparation, and confirms or rejects application health. Callbacks must not perform
 network work or rendering inside USB/network callbacks. One worker owns the
 update; streaming buffers and retries are bounded.
 
@@ -162,34 +166,71 @@ does not reboot the desktop PC.
 
 ## Partition migration
 
-Existing remote-wake and Voidstats builds have one factory app slot, so they
+Existing factory-layout remote-wake and Voidstats builds have one app slot, so they
 cannot safely acquire this mechanism through an ordinary app-only OTA update.
 Bootstrap the A/B layout once over USB, preserving each device's existing NVS
 offset and size. Routine OTA must never rewrite the partition table, bootloader
 or pairing/replay state.
 
-- Standalone 4 MB: design two approximately 1.9 MB slots and reserve `otadata`;
-  check actual firmware size/headroom in CI before approving the layout.
+- Standalone 4 MB: `partitions-ota.csv` uses two `0x1e0000` slots at `0x10000`
+  and `0x1f0000`, with otadata at `0x3d0000`. NVS remains `0x9000/0x6000`.
 - Voidstats 16 MB: two 6 MB slots fit. Preserve its NVS at `0x9000/0x5000` and
-  existing legacy filesystem region while selecting final offsets. A candidate
-  is OTA0 `0x10000/0x600000`, otadata `0x800000/0x2000`, OTA1
-  `0x810000/0x600000`; inventory flash and validate the bootstrap before adoption.
+  existing legacy filesystem region. Its opt-in layout is OTA0 `0x10000/0x600000`,
+  otadata `0x800000/0x2000`, OTA1 `0x810000/0x600000`. Inventory and validate
+  the existing device before migration; layout changes require explicit USB bootstrap.
 
-The current factory partition files remain unchanged by this plan. A/B migration
+The default factory partition files remain unchanged. A/B migration
 and bootloader rollback configuration belong to each product's release, not a
 hidden side effect of importing the component.
 
-## Implementation milestones
+## Build and commissioning
 
-1. Generic local bootloader entry plus the Voidstats host helper; prove a complete
-   software-entry → flash → normal-boot cycle on the physical board.
-2. Finalize identity/manifest test vectors, product A/B bootstrap layouts and
-   local health/rollback tests. Test bad signatures, wrong products/profiles,
-   truncated images, out-of-space, stale releases and power loss at each stage.
-3. Implement the shared updater and application adapters; exercise a local
-   signed release and forced rollback before attaching GitHub/relay automation.
-4. Add release CI and cached relay announcements. Publish a canary release,
-   verify normal wake behavior and rollback, then promote the stable channel.
+Use ESP-IDF 5.4 for the tested initial implementation. The default standalone
+build retains its factory partition layout and disables `CONFIG_RW_OTA_ENABLED`.
+For a fresh A/B build, overlay `firmware/sdkconfig.ota.defaults` after the common
+and target defaults. It enables rollback and selects `partitions-ota.csv`.
+The application `APP_OTA_*` settings supply board/profile/channel, release counter,
+HTTPS manifest/source URLs, publisher public key ID/generation/hex, and auto/notify
+policy. `PROJECT_VER` becomes both ESP app version and signed image identity.
+See [publisher instructions](../tools/ota/README.md) for exact commands and schemas.
+
+An empty public key/source configuration starts **boot-health-only** mode: no
+network downloads or relay update registration. This lets the A/B bootstrap be
+validated before enrolling a real publisher. Importing the component does not
+implicitly trust this repository or any release key. Application health calls
+must still run: when the first A/B image is healthy, establish its valid selector
+so the first network update has a confirmed rollback target.
+
+After host and target checks, commissioning consists of:
+
+1. Verify the USB A/B bootstrap, preserved NVS, local health and return to telemetry.
+2. Configure a product publisher public key and release source, provision Wi-Fi,
+   and test a signed update plus forced rollback using a controlled release.
+3. Configure the protected GitHub publication environment and versioned assets,
+   enable the relay catalog bindings, then promote a tested stable release.
+
+The reusable workflow has no push trigger. Adding it does not create GitHub
+secrets, a release, a metadata branch or a relay deployment. A product-owned
+build workflow must supply a tested full application artifact. Hardware power-loss
+and real HTTPS rollback tests must be recorded explicitly; mocked failures do not
+establish those results. Current source/build evidence is in the product validation
+record and the test runners below.
+
+## Repeatable software checks
+
+```sh
+CJSON_DIR=/path/to/cJSON bash firmware/test_host/run.sh
+CJSON_DIR=/path/to/cJSON bash firmware/test_host/ota/run.sh
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tools/ota/tests -v
+npm --prefix relay run typecheck
+npm --prefix relay test
+```
+
+The release tools verify real Ed25519 signatures, ESP image structure, embedded
+identity, hash/length and known slot capacities. Relay tests cover matching,
+allowlists, failure isolation, hibernation and repeated hints. Firmware tests
+separate portable manifest/journal checks from mocked production updater lifecycle
+faults. Target builds cover standalone S3/C3 and embedded Voidstats.
 
 ## Primary references
 

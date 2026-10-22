@@ -1,5 +1,14 @@
 menu "remote-wake"
 
+    config RW_OTA_ENABLED
+        bool "Whole-application OTA updater (application enrollment required)"
+        default n
+        help
+            Requires application identity, explicit publisher public keys and HTTPS
+            release source, A/B app slots, otadata and bootloader rollback. No keys
+            or source are supplied by this component. Without publisher enrollment,
+            an initialized updater only tracks boot health and rollback.
+
     config RW_PROFILE_POWER_ONLY
         bool "Power-button-only profile (no USB HID)"
         default y if !SOC_USB_OTG_SUPPORTED

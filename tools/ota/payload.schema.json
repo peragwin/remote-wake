@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OTA signed payload v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "board",
+    "channel",
+    "chip",
+    "expires",
+    "key_generation",
+    "layout",
+    "min_flash",
+    "min_psram",
+    "min_updater",
+    "product",
+    "profile",
+    "published",
+    "release",
+    "sha256",
+    "size",
+    "url",
+    "v",
+    "version"
+  ],
+  "properties": {
+    "product": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 31,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+    },
+    "board": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 31,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+    },
+    "profile": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 47,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+    },
+    "channel": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 15,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+    },
+    "layout": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 31,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+    },
+    "chip": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 15,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+    },
+    "version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 31,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+    },
+    "min_flash": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295
+    },
+    "min_psram": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295
+    },
+    "published": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295
+    },
+    "expires": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295
+    },
+    "release": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 4294967295
+    },
+    "size": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 4294967295
+    },
+    "key_generation": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 4294967295
+    },
+    "v": {
+      "const": 1,
+      "type": "integer"
+    },
+    "min_updater": {
+      "const": 1,
+      "type": "integer"
+    },
+    "url": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 511,
+      "pattern": "^https://[^\\s]+$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  },
+  "$comment": "Runtime additionally checks timestamps, source prefix, identity, key generation, release high-water, image capacity and embedded metadata. JSON duplicate keys must be rejected before schema validation."
+}

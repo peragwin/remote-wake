@@ -163,9 +163,38 @@ its action list remain unchanged. It writes no flash, NVS, partition table or
 OTA boot selection and preserves pairing/replay counters. ROM download can be
 left with an EN reset/power cycle or `esptool --after watchdog_reset`; a regular
 software reset may retain the forced-download state. Flash only the intended
-firmware ranges and retain the NVS partition when updating. This is ROM entry,
-not an OTA updater; OTA partitioning, signed-image policy and rollback remain
-future application work.
+firmware ranges and retain the NVS partition when updating. ROM entry is separate
+from the opt-in whole-application updater described below.
+
+## Whole-application OTA
+
+Enable `CONFIG_RW_OTA_ENABLED` with a product-owned A/B partition layout and
+`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`. Include `ota.h`, retain one
+`RW_OTA_DEFINE_IMAGE_IDENTITY(...)` record, and pass its address to `rw_ota_init`.
+Use the same version in ESP-IDF `PROJECT_VER`; release counters increase within
+the exact product/board/profile/channel/layout/chip scope. The source prefix,
+manifest URL, publisher key set, redirect hosts and policy belong to the app.
+All configuration pointers must live for the application lifetime. Empty trust
+starts boot-health-only mode and never registers or downloads releases.
+
+Call `rw_ota_confirm_healthy()` after required local startup/functional checks,
+including setup mode. Never require an online desktop/Internet connection for
+health. Pending candidates have a bounded health deadline and can be explicitly
+rejected with `rw_ota_reject_unhealthy()`. Confirmation establishes the initial
+valid OTA selector when needed and persists the confirmed release journal.
+Initialization failures must not erase NVS; keep settings readable by rollback.
+
+`rw_ota_offer_manifest()` only copies a bounded URL. Network/download work belongs
+to the updater task. Read `rw_ota_get_status()` from UI code; progress callbacks
+run in the worker and must not render or block. `prepare_restart` returns
+`ESP_ERR_INVALID_STATE` while the app is busy; only return `ESP_OK` after stopping
+app USB users/other tasks that cannot survive restart. The engine reserves shared
+HID/power work, selects a verified inactive image, then reboots the controller.
+If preparation fails or times out, a failed progress event lets the app resume
+its work. Do not reinitialize shared services during accepted maintenance.
+
+See [updates.md](updates.md) and the [publisher tools](../tools/ota/README.md)
+for signed schemas, source constraints, release automation and commissioning.
 
 ## Validation
 

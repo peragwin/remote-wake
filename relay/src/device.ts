@@ -10,6 +10,8 @@ import {
 } from "./ratelimit";
 import { parseRoute } from "./routes";
 import type { Env } from "./types";
+import { fetchCatalog, matchingRelease, registration, updateSource, UPDATE_REFRESH_MS, UPDATE_RETRY_MS,
+  type UpdateAttachment } from "./updates";
 
 /** Maximum accepted `POST /v1/send` body (protocol: 4 KiB). */
 export const MAX_SEND_BYTES = 4096;
@@ -80,8 +82,8 @@ async function readBounded(
 /**
  * One Durable Object per deviceId.
  *
- * Holds exactly three pieces of state: the SHA-256 of the claiming token, a
- * presence timestamp, and a rate-limit bucket. Command and response payloads
+ * Holds the claiming token digest, presence and rate-limit state. Optional
+ * public release registration/check metadata lives in WebSocket attachments. Command and response payloads
  * pass through memory only — nothing is written to storage and nothing is
  * logged.
  */
@@ -99,6 +101,7 @@ export class DeviceObject extends DurableObject<Env> {
   private gen = 0;
   /** Command id → resolver for the in-flight long-poll. Memory only. */
   private readonly pending = new Map<string, Pending>();
+  private checkingUpdate = false;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -210,10 +213,11 @@ export class DeviceObject extends DurableObject<Env> {
     );
   }
 
-  override webSocketMessage(_ws: WebSocket, message: string | ArrayBuffer) {
+  override async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+    if (ws !== this.activeSocket()) return;
     // Binary frames are not part of the protocol.
     if (typeof message !== "string") return;
-    if (message.length > MAX_DEVICE_FRAME_BYTES) return;
+    if (message.length > MAX_DEVICE_FRAME_BYTES || new TextEncoder().encode(message).byteLength > MAX_DEVICE_FRAME_BYTES) return;
 
     let parsed: unknown;
     try {
@@ -221,7 +225,20 @@ export class DeviceObject extends DurableObject<Env> {
     } catch {
       return; // Well-formedness is the only thing we check.
     }
-    if (typeof parsed !== "object" || parsed === null) return;
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return;
+    // Unsolicited update capability is separate from signed command responses.
+    const hello = (parsed as { hello?: unknown }).hello;
+    if (typeof hello === "object" && hello !== null && !Array.isArray(hello)) {
+      const update = registration((hello as { update?: unknown }).update);
+      if (update && updateSource(this.env)) {
+        const old = this.updateAttachment(ws);
+        // At most one registration-triggered check per 30s, including failures.
+        ws.serializeAttachment({ registration: update, checked_at: old?.checked_at ?? 0,
+          manifest: old && JSON.stringify(old.registration) === JSON.stringify(update) ? old.manifest : null } satisfies UpdateAttachment);
+        await this.checkUpdate(ws, UPDATE_RETRY_MS);
+      }
+      return;
+    }
 
     const id = (parsed as { id?: unknown }).id;
     if (typeof id !== "string") return; // e.g. the `hello` frame.
@@ -230,6 +247,39 @@ export class DeviceObject extends DurableObject<Env> {
     if (!waiter) return; // Unsolicited or already timed out.
     this.pending.delete(id);
     waiter.resolve(message); // Forwarded verbatim; never inspected further.
+  }
+
+  private updateAttachment(ws: WebSocket): UpdateAttachment | null {
+    const value: unknown = ws.deserializeAttachment();
+    if (typeof value !== "object" || value === null) return null;
+    const data = value as Partial<UpdateAttachment>;
+    const update = registration(data.registration);
+    return update && typeof data.checked_at === "number" && Number.isFinite(data.checked_at) &&
+      (data.manifest === null || typeof data.manifest === "string")
+      ? { registration: update, checked_at: data.checked_at, manifest: data.manifest } : null;
+  }
+
+  private async checkUpdate(ws: WebSocket, interval: number): Promise<void> {
+    const state = this.updateAttachment(ws);
+    const source = updateSource(this.env);
+    if (!state || !source || this.checkingUpdate || Date.now() - state.checked_at < interval) return;
+    state.checked_at = Date.now();
+    ws.serializeAttachment(state); // Survives hibernation and bounds failing retries.
+    this.checkingUpdate = true;
+    try {
+      const releases = await fetchCatalog(source);
+      if (ws !== this.activeSocket()) return; // A fetch must not revive a superseded socket.
+      const current = this.updateAttachment(ws);
+      if (!current || JSON.stringify(current.registration) !== JSON.stringify(state.registration)) return;
+      const release = releases && matchingRelease(releases, state.registration);
+      if (!release) return;
+      // Repeat on each bounded refresh: a device may have been busy, reconnecting
+      // to its updater worker, or throttled when the previous advisory arrived.
+      ws.send(JSON.stringify({ update_available: { v: 1, ...release } }));
+      state.manifest = release.manifest_url;
+      ws.serializeAttachment(state);
+    } catch { /* A release-source failure never tears down keyboard transport. */ }
+    finally { this.checkingUpdate = false; }
   }
 
   override webSocketClose() {
@@ -273,6 +323,7 @@ export class DeviceObject extends DurableObject<Env> {
       return;
     }
     await this.ctx.storage.setAlarm(Date.now() + PING_INTERVAL_MS);
+    await this.checkUpdate(ws, UPDATE_REFRESH_MS);
   }
 
   // ------------------------------------------------------------------- send
