@@ -82,12 +82,30 @@ Failures produce an `err` response (below) and are rate-limited.
 | `act`        | `args`                          | Effect |
 |--------------|---------------------------------|--------|
 | `ping`       | `{}`                            | Liveness; responds `pong` with uptime + state. |
-| `status`     | `{}`                            | Reports device state. `res`: `{"fw": "x.y.z", "rssi": -55, "usb": "mounted"\|"suspended"\|"down", "uptime": <seconds>}`. |
+| `status`     | `{}`                            | Reports device state. `res`: `{"fw": "x.y.z", "rssi": -55, "usb": "mounted"\|"suspended"\|"down", "pc_power": "on"\|"off"\|"sleep"\|"unknown", "uptime": <seconds>}`. |
 | `wake`       | `{}`                            | HID: press+release a zero-side-effect key (Left-Ctrl) twice, 50 ms apart. Wakes a sleeping host. |
 | `type`       | `{"text": "...", "enter": true}`| HID: type UTF-8 text (US layout mapping), optional trailing Enter. Max 256 chars. Used for typing the login password. |
 | `keys`       | `{"seq": [["LGUI","L"],["ENTER"]]}` | HID: sequence of chords, each = list of key names, pressed together then released, 30 ms apart. Max 32 chords. |
 | `power_tap`  | `{"ms": 200}` (50–1000)         | Drive PWR_SW optocoupler for `ms` (default 200) — power on / graceful ACPI signal. |
 | `power_hold` | `{"ms": 6000}` (3000–12000)     | Drive PWR_SW for `ms` (default 6000) — hard power-off. |
+
+### `status.pc_power`
+
+The host's power state as read from its front-panel power LED:
+
+| Value     | Meaning |
+|-----------|---------|
+| `on`      | LED steadily lit for at least 5 s. |
+| `off`     | LED steadily dark for at least 5 s. |
+| `sleep`   | LED blinking or breathing: four or more consecutive changes, each less than 5 s apart. |
+| `unknown` | The device has no sense input (`CONFIG_RW_PC_SENSE_ENABLED=n`), or has not yet seen 5 s of steady LED or a blink pattern since boot. |
+
+Between those decisions the last answer is kept, so a change appears after
+5 s of steady LED (or after the fourth blink edge). Changes shorter than 50 ms
+are ignored. Boards that switch the LED off in sleep instead of blinking it
+report `off` while asleep. The field is informational: it never gates
+`power_tap`, `power_hold` or the HID actions. Clients must treat values they
+don't recognise as `unknown`.
 
 ## Response envelope
 

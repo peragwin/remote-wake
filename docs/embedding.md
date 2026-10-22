@@ -37,7 +37,7 @@ own minimal test manifest.
 
 Applications should depend on `remote_wake`, not its source files or managed
 library names. Its existing public headers provide `rw_config_*`, `rw_auth_*`,
-`rw_power_btn_*`, `rw_led_*`, `rw_hid_*`, `rw_prov_*`, `rw_relay_*` and
+`rw_power_btn_*`, `rw_pc_sense_*`, `rw_led_*`, `rw_hid_*`, `rw_prov_*`, `rw_relay_*` and
 `rw_wifi_station_start`. JSON is public because existing auth/HID headers use
 `cJSON`; platform and managed implementation requirements are declared by
 the component. An application that directly calls ESP-IDF APIs must declare
@@ -52,7 +52,9 @@ own board and boot policy. The existing initialization functions do not form
 a general-purpose start/stop service; call startup functions once.
 
 1. Configure the power output safely with `rw_power_btn_init()` before other
-   initialization can fail. Initialize the optional status LED only if its
+   initialization can fail. Then call `rw_pc_sense_init()` if the board
+   has the optional power-LED sense input. It's best effort: an error leaves
+   `pc_power` as `unknown` and must not stop boot. Initialize the optional status LED only if its
    configured GPIO belongs to remote-wake.
 2. The application initializes NVS once, then calls `rw_config_init()` and
    `rw_auth_init()`. Config owns namespace `rw_cfg`, including identity,
@@ -75,6 +77,11 @@ a general-purpose start/stop service; call startup functions once.
    run a competing Wi-Fi reconnect manager. A host-managed Wi-Fi adapter is
    not provided by this extraction.
 
+`CONFIG_RW_PC_SENSE_ENABLED` (default n) adds a power-LED sense input. It uses its
+own GPIO and esp_timer sampler, shares no lock with power or HID actions, and
+only feeds `status.pc_power`. `rw_pc_sense_get()` returns the latest
+classification, for example for an application display.
+
 Set `CONFIG_RW_PWR_ENABLED=n` when the board has no PWR_SW circuit.
 `rw_power_btn_init()` then succeeds without touching GPIOs, registering shutdown
 handlers or allocating locks; pulses return `ESP_ERR_NOT_SUPPORTED` and busy is
@@ -85,7 +92,7 @@ The default remains enabled for existing standalone installations.
 The existing status LED is an optional component service, not a display
 extension API. Display drivers, rendering, themes, board presets and host
 telemetry belong to the embedding application. Avoid pin conflicts by setting
-`CONFIG_RW_PWR_GPIO`, `CONFIG_RW_BOOT_GPIO` for an application that uses the
+`CONFIG_RW_PWR_GPIO`, `CONFIG_RW_PC_SENSE_GPIO`, `CONFIG_RW_BOOT_GPIO` for an application that uses the
 reference button logic, and either configuring or disabling
 `CONFIG_RW_LED_ENABLED` in the application's sdkconfig defaults.
 

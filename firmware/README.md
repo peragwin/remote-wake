@@ -43,6 +43,8 @@ registers the standalone `main.c` entry point and its component dependency.
 - `main/b64url.*` — unpadded base64url + constant-time compare
 - `main/usb_hid.*` — TinyUSB HID keyboard (`wake`, `type`, `keys`)
 - `main/power_btn.*` — GPIO pulse driver for the PWR_SW optocoupler
+- `main/pc_power.*` — pure on/off/sleep classifier for the host power LED
+- `main/pc_sense.*` — optional power-LED sense input (`CONFIG_RW_PC_SENSE_*`)
 - `main/relay_client.*` — WSS client, dispatch loop, backoff, SNTP
 - `main/provisioning.*` — SoftAP setup mode + `/pair` (+ `main/www/setup.html`)
 - `main/led.*` — WS2812 status patterns
@@ -128,7 +130,7 @@ the action check, so a refused action can never be replayed.
 
 ## Response shapes
 - `ping` → `{"uptime": <s>, "usb": "mounted"|"suspended"|"down"}`
-- `status` → `{"fw": "1.0.1", "rssi": <dBm>, "usb": …, "uptime": <s>}`
+- `status` → `{"fw": "1.0.1", "rssi": <dBm>, "usb": …, "pc_power": "on"|"off"|"sleep"|"unknown", "uptime": <s>}`
 - `wake` / `type` / `keys` → `{}` on success
 - `power_tap` / `power_hold` → `{"ms": <actual>}`
 - errors: `bad_request`, `version`, `dev_mismatch`, `unknown_key`, `sig`,
