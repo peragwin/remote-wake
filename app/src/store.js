@@ -3,7 +3,8 @@
  *
  * Stores:
  *   devices   keyPath 'deviceId'  → { deviceId, deviceToken, relayUrl, name, kid,
- *                                     addedAt, unlockText? }
+ *                                     addedAt, unlockText?, unlockEnter?,
+ *                                     acts? (last status `acts`; see caps.js) }
  *   keys      keyPath 'kid'       → { kid, mode:'webcrypto'|'noble',
  *                                     privateKey|seed, publicKeyRaw, createdAt }
  *                                     (one record, id 'phone' — see crypto.js)

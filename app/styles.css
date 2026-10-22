@@ -421,6 +421,7 @@ main {
 .chip:active { transform: scale(.94); }
 .chip:hover { border-color: rgba(126, 231, 255, .4); background: rgba(126, 231, 255, .1); }
 .chip-add { color: var(--cyan); border-style: dashed; }
+.chip:disabled { opacity: .42; cursor: not-allowed; transform: none; }
 
 .seq-strip {
   margin-top: 14px; padding-top: 14px;

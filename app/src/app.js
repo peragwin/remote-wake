@@ -15,6 +15,7 @@ import { toast, sheet, confirmDestructive, attachHold, copyText, flash } from '.
 import { PRESETS, prettyChord, parseChord } from './keys.js';
 import { toSVG } from './qr.js';
 import { parsePairingBlob, pairingChange, relayLabel } from './pairing.js';
+import { parseActs, actAllowed, sameActs } from './caps.js';
 
 const state = {
   device: null,
@@ -134,8 +135,33 @@ function renderHome() {
   if (!d) return;
   $('#device-name').textContent = d.name || 'Device';
   $('#device-id').textContent = d.deviceId;
+  renderCapabilities();
+}
+
+/* ── capabilities ─────────────────────────────────────────────────── */
+
+/** Whether the active device's firmware accepts @p act (unknown → yes). */
+const allowed = (act) => actAllowed(state.device?.acts, act);
+
+/** Disable what the device's last-seen `acts` list (status) rules out. */
+function renderCapabilities() {
+  const keysOk = allowed('keys');
+  if (!keysOk) state.sequence = [];
+  $('#keys-note').hidden = keysOk;
+  for (const chip of $$('#chip-row .chip')) chip.disabled = !keysOk;
   renderUnlockCard();
   renderSequence();
+}
+
+/** Persist the `acts` a status reply reported (none: older firmware). */
+async function rememberActs(deviceId, res) {
+  const acts = parseActs(res);
+  const known = (await store.getDevice(deviceId))?.acts;
+  if (sameActs(acts, known)) return;
+  const saved = await store.saveDevice({ deviceId, acts });
+  if (state.device?.deviceId !== deviceId) return; // switched devices meanwhile
+  state.device = saved;
+  renderCapabilities();
 }
 
 function renderPresence(p) {
@@ -168,9 +194,11 @@ async function onRefresh() {
     await poller?.refresh();
     // `status` is read-only; it is the one action that skips the presence gate
     // so that a routine refresh does not demand a fingerprint.
+    const deviceId = state.device.deviceId;
     const r = await cmd.status(state.device);
     if (r.ok) {
       renderStats(r.res || {});
+      await rememberActs(deviceId, r.res);
       toast('ok', 'Status updated');
     } else {
       toast('err', 'Status failed', errorMessage(r.err, r.res));
@@ -216,8 +244,11 @@ async function onWake() {
 
 function renderUnlockCard() {
   const hasText = !!state.device?.unlockText;
-  $('#btn-unlock').disabled = !hasText;
-  $('#unlock-sub').textContent = hasText
+  const typeOk = allowed('type');
+  $('#btn-unlock').disabled = !hasText || !typeOk;
+  $('#unlock-sub').textContent = !typeOk
+    ? 'This device’s firmware doesn’t allow remote typing.'
+    : hasText
     ? `Types ${state.device.unlockText.length} characters${
         state.device.unlockEnter === false ? '' : ', then Enter'
       }. Stored on this phone only.`
@@ -226,7 +257,7 @@ function renderUnlockCard() {
 
 async function onUnlock() {
   const text = state.device?.unlockText;
-  if (!text) return;
+  if (!text || !allowed('type')) return;
   await guard(async () => {
     const r = await cmd.typeText(state.device, text, state.device.unlockEnter !== false);
     if (r.ok) toast('ok', 'Unlock sent');
@@ -284,6 +315,7 @@ function renderSequence() {
 
   $('#btn-keys-send').textContent =
     state.sequence.length === 1 ? 'Send combo' : `Send ${state.sequence.length} combos`;
+  $('#btn-keys-send').disabled = state.busy || !allowed('keys');
 }
 
 async function onCustomChord() {
@@ -324,7 +356,7 @@ async function onCustomChord() {
 }
 
 async function onSendKeys() {
-  if (!state.sequence.length) return;
+  if (!state.sequence.length || !allowed('keys')) return;
   const seq = state.sequence.map((c) => [...c]);
   await guard(async () => {
     const r = await cmd.sendKeys(state.device, seq);
@@ -788,7 +820,8 @@ function setBusy(busy) {
   for (const id of ['#btn-wake', '#btn-unlock', '#btn-power-tap', '#btn-keys-send', '#btn-power-hold']) {
     const node = $(id);
     if (!node) continue;
-    if (id === '#btn-unlock' && !state.device?.unlockText) continue;
+    if (id === '#btn-unlock' && (!state.device?.unlockText || !allowed('type'))) continue;
+    if (id === '#btn-keys-send' && !allowed('keys')) continue;
     node.disabled = busy;
   }
 }
