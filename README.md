@@ -51,6 +51,10 @@ mint commands. Full threat model: [`docs/security.md`](docs/security.md).
 Chip support: **ESP32-S3** (full: USB HID + GPIO). Classic ESP32 / ESP32-C3
 have no usable USB OTG — they build in a *power-button-only* profile.
 
+For use inside another application, see the [embedding guide](docs/embedding.md).
+The [firmware update plan](docs/updates.md) defines shared update machinery and
+application-specific release identity; OTA is planned, not implemented yet.
+
 ## Deployment
 
 `main` is the default branch. Website changes pushed to `main` are tested and
