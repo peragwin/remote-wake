@@ -26,4 +26,14 @@ for kbd in 0 1; do
         -DCONFIG_RW_ACT_KEYBOARD_INPUT="$kbd" \
         -Iinclude test_relay.c "${json_flags[@]}" -o "$build_dir/test_update_hints"
     ASAN_OPTIONS="detect_leaks=0${ASAN_OPTIONS:+:$ASAN_OPTIONS}" "$build_dir/test_update_hints"
+
+    # The keyboard gate end to end: really signed envelopes through the real
+    # verifier (auth.c + libsodium) and the relay's own auth ops into dispatch.
+    "${CC:-cc}" -std=c11 -D_POSIX_C_SOURCE=200809L -DRW_RELAY_REAL_JSON -DRW_RELAY_REAL_AUTH \
+        -Wall -Wextra -Werror -Wno-unused-function -Wno-unused-variable -Wno-unused-parameter -pthread \
+        -fsanitize=address,undefined -fno-omit-frame-pointer -g \
+        -DCONFIG_RW_ACT_KEYBOARD_INPUT="$kbd" \
+        -Iinclude test_relay.c ../../main/auth.c ../../main/canon_json.c ../../main/b64url.c \
+        "${json_flags[@]}" -lsodium -lm -o "$build_dir/test_e2e_gate"
+    ASAN_OPTIONS="detect_leaks=0${ASAN_OPTIONS:+:$ASAN_OPTIONS}" "$build_dir/test_e2e_gate"
 done

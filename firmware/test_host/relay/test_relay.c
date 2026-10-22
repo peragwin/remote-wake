@@ -24,6 +24,9 @@ static uint32_t mock_random_state;
 static int mock_wdt_feeds;
 static int mock_restarts;
 static int mock_actions;
+static uint8_t mock_pubkey[32];
+static uint64_t mock_ctr;
+static int mock_set_ctr_calls;
 static esp_err_t mock_power_result;
 static bool mock_ota_enabled;
 static unsigned mock_ota_offers;
@@ -499,6 +502,168 @@ static void test_status_reports_pc_power(void)
     }
     mock_pc_power=RW_PC_UNKNOWN;
 }
+
+#ifdef RW_RELAY_REAL_AUTH
+/* End to end through the production wiring: a really signed envelope goes
+ * through handle_envelope -> rw_auth_verify (real, libsodium) with the
+ * relay's own ops (ops_act_enabled, set_ctr) -> dispatch. Only NVS, HID and
+ * the socket are faked. Expectations come from the Kconfig contract: with
+ * CONFIG_RW_ACT_KEYBOARD_INPUT off, type/keys answer unknown_act with no HID
+ * call, after the counter is persisted (so the same envelope is then a
+ * replay); with it on they run once. */
+#include "sodium.h"
+#include "../../../main/b64url.h"
+
+static uint8_t e2e_sk[crypto_sign_SECRETKEYBYTES];
+
+static void e2e_keys(void)
+{
+    uint8_t seed[crypto_sign_SEEDBYTES];
+    memset(seed, 0x42, sizeof(seed));
+    assert(sodium_init() >= 0);
+    assert(crypto_sign_seed_keypair(mock_pubkey, e2e_sk, seed) == 0);
+}
+
+/* Builds and signs a v1 envelope; caller frees. */
+static char *e2e_envelope(const char *act, const char *args_json, uint64_t ctr)
+{
+    cJSON *args = cJSON_Parse(args_json);
+    assert(args);
+    size_t len = 0;
+    char *msg = rw_auth_signing_string("0123456789abcdef", "c1", 1700000000, ctr,
+                                       act, args, &len);
+    assert(msg);
+    uint8_t sig[crypto_sign_BYTES];
+    crypto_sign_detached(sig, NULL, (const uint8_t *)msg, len, e2e_sk);
+    free(msg);
+    char sig_b64[128];
+    assert(rw_b64url_encode(sig, sizeof(sig), sig_b64, sizeof(sig_b64)) > 0);
+    cJSON *env = cJSON_CreateObject();
+    cJSON_AddNumberToObject(env, "v", 1);
+    cJSON_AddStringToObject(env, "dev", "0123456789abcdef");
+    cJSON_AddStringToObject(env, "id", "c1");
+    cJSON_AddNumberToObject(env, "ts", 1700000000);
+    cJSON_AddNumberToObject(env, "ctr", (double)ctr);
+    cJSON_AddStringToObject(env, "act", act);
+    cJSON_AddStringToObject(env, "kid", "p1");
+    cJSON_AddItemToObject(env, "args", args);
+    cJSON_AddStringToObject(env, "sig", sig_b64);
+    char *out = cJSON_PrintUnformatted(env);
+    cJSON_Delete(env);
+    return out;
+}
+
+/* Feeds @p env to the device; returns the parsed reply (caller deletes). */
+static cJSON *e2e_send(uint32_t session, const char *env)
+{
+    mock_sent[0] = 0;
+    handle_envelope(env, strlen(env), session);
+    cJSON *reply = cJSON_Parse(mock_sent);
+    assert(reply);
+    return reply;
+}
+
+static bool e2e_is_err(const cJSON *reply, const char *err)
+{
+    const cJSON *ok = cJSON_GetObjectItemCaseSensitive(reply, "ok");
+    const cJSON *e = cJSON_GetObjectItemCaseSensitive(reply, "err");
+    return cJSON_IsFalse(ok) && cJSON_IsString(e) && !strcmp(e->valuestring, err);
+}
+
+static const char *e2e_args(const char *act)
+{
+    if (!strcmp(act, "type")) return "{\"text\":\"a\",\"enter\":true}";
+    if (!strcmp(act, "keys")) return "{\"seq\":[[\"ENTER\"]]}";
+    if (!strcmp(act, "power_tap")) return "{\"ms\":200}";
+    if (!strcmp(act, "power_hold")) return "{\"ms\":6000}";
+    return "{}";
+}
+
+/* Requirement 1: the gate holds through real auth, and burns the counter. */
+static void test_e2e_keyboard_gate_persists_counter(void)
+{
+    const char *acts[] = {"type", "keys"};
+    for (int i = 0; i < 2; i++) {
+        reset();
+        uint32_t session = connect();
+        mock_ctr = 4;
+        mock_set_ctr_calls = 0;
+        char *env = e2e_envelope(acts[i], e2e_args(acts[i]), 5);
+        cJSON *reply = e2e_send(session, env);
+        assert(mock_ctr == 5 && mock_set_ctr_calls == 1); /* persisted either way */
+#if CONFIG_RW_ACT_KEYBOARD_INPUT
+        assert(cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(reply, "ok")));
+        assert(mock_actions == 1);
+#else
+        assert(e2e_is_err(reply, "unknown_act"));
+        assert(mock_actions == 0); /* no HID input at all */
+#endif
+        cJSON_Delete(reply);
+        /* The very same signed envelope again: now a replay, never executed. */
+        reply = e2e_send(session, env);
+        assert(e2e_is_err(reply, "replay"));
+        assert(mock_actions == (CONFIG_RW_ACT_KEYBOARD_INPUT ? 1 : 0));
+        assert(mock_ctr == 5);
+        cJSON_Delete(reply);
+        cJSON_free(env);
+    }
+}
+
+/* Requirements 1 and 2: what a signed `status` lists as acts is exactly what
+ * a signed command is accepted for (not answered unknown_act), over every
+ * protocol v1 action plus near-misses. */
+static void test_e2e_status_acts_match_acceptance(void)
+{
+    reset();
+    uint32_t session = connect();
+    mock_ctr = 0;
+    uint64_t ctr = 0;
+    char *env = e2e_envelope("status", "{}", ++ctr);
+    cJSON *reply = e2e_send(session, env);
+    cJSON_free(env);
+    assert(cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(reply, "ok")));
+    const cJSON *acts = cJSON_GetObjectItemCaseSensitive(
+        cJSON_GetObjectItemCaseSensitive(reply, "res"), "acts");
+    assert(cJSON_IsArray(acts));
+
+    const char *candidates[] = {"ping", "status", "wake", "type", "keys", "power_tap",
+                                "power_hold", "Type", "keys ", "TYPE", "key", "power",
+                                "reboot", "typ"};
+    int n_listed = 0;
+    for (unsigned c = 0; c < sizeof(candidates) / sizeof(candidates[0]); c++) {
+        const char *act = candidates[c];
+        bool listed = false;
+        for (const cJSON *a = acts->child; a; a = a->next) {
+            assert(cJSON_IsString(a));
+            listed = listed || !strcmp(a->valuestring, act);
+        }
+        n_listed += listed;
+        int before = mock_actions;
+        char *cmd = e2e_envelope(act, e2e_args(act), ++ctr);
+        cJSON *r = e2e_send(session, cmd);
+        cJSON_free(cmd);
+        bool accepted = !e2e_is_err(r, "unknown_act");
+        if (listed != accepted) {
+            fprintf(stderr, "act \"%s\": listed=%d accepted=%d\n", act, listed, accepted);
+        }
+        assert(listed == accepted);
+        assert(mock_ctr == ctr); /* every signed command consumed its counter */
+        if (!accepted) assert(mock_actions == before);
+        cJSON_Delete(r);
+    }
+    /* No act outside the candidate universe is listed. */
+    assert(n_listed == cJSON_GetArraySize(acts));
+    /* Always available regardless of the option; type/keys follow it. */
+    const char *always[] = {"ping", "status", "wake", "power_tap", "power_hold"};
+    for (unsigned i = 0; i < 5; i++) {
+        bool found = false;
+        for (const cJSON *a = acts->child; a; a = a->next) found = found || !strcmp(a->valuestring, always[i]);
+        assert(found);
+    }
+    assert(n_listed == (CONFIG_RW_ACT_KEYBOARD_INPUT ? 7 : 5));
+    cJSON_Delete(reply);
+}
+#endif /* RW_RELAY_REAL_AUTH */
 #endif
 
 static void test_clock_sync(void)
@@ -520,6 +685,12 @@ int main(void)
     test_status_reports_pc_power();
     test_status_reports_acts();
     test_keyboard_dispatch_gate();
+#ifdef RW_RELAY_REAL_AUTH
+    e2e_keys();
+    test_e2e_keyboard_gate_persists_counter();
+    test_e2e_status_acts_match_acceptance();
+    puts("relay e2e (real auth) gate tests passed");
+#endif
 #else
     test_disabled_power_dispatch();
     test_fragmentation();
@@ -656,12 +827,13 @@ void cJSON_AddBoolToObject(cJSON *item, const char *name, bool value) { }
 void cJSON_AddItemToObject(cJSON *item, const char *name, cJSON *value) { free(value); }
 cJSON *cJSON_CreateStringArray(const char *const *strings, int count) { return cJSON_CreateObject(); }
 #endif
-bool rw_config_get_key(const char *kid, uint8_t out[32]) { return true; }
-bool rw_config_get_ctr(const char *kid, uint64_t *out) { *out = 0; return true; }
-esp_err_t rw_config_set_ctr(const char *kid, uint64_t ctr) { return ESP_OK; }
+bool rw_config_get_key(const char *kid, uint8_t out[32]) { memcpy(out, mock_pubkey, 32); return true; }
+bool rw_config_get_ctr(const char *kid, uint64_t *out) { *out = mock_ctr; return true; }
+esp_err_t rw_config_set_ctr(const char *kid, uint64_t ctr) { mock_ctr = ctr; ++mock_set_ctr_calls; return ESP_OK; }
 const char *rw_config_device_id(void) { return "0123456789abcdef"; }
 const char *rw_config_device_token(void) { return "mock-token"; }
 esp_err_t rw_config_relay_ws_url(char *out, size_t size) { snprintf(out, size, "wss://mock"); return ESP_OK; }
+#ifndef RW_RELAY_REAL_AUTH
 void rw_auth_peek_id(const char *text, size_t len, char *out, size_t size) { out[0] = '\0'; }
 rw_auth_err_t rw_auth_verify(const rw_auth_ops_t *ops, const char *text, size_t len, rw_cmd_t *cmd)
 {
@@ -673,6 +845,7 @@ rw_auth_err_t rw_auth_verify(const rw_auth_ops_t *ops, const char *text, size_t 
 }
 const char *rw_auth_err_str(rw_auth_err_t err) { return "mock"; }
 void rw_cmd_free(rw_cmd_t *cmd) { }
+#endif /* !RW_RELAY_REAL_AUTH */
 void rw_led_set(rw_led_state_t state) { }
 void rw_led_flash(rw_led_state_t state, uint32_t ms) { }
 bool rw_hid_available(void) { return true; }
