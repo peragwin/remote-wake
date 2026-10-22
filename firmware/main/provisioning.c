@@ -5,6 +5,8 @@
 #include <string.h>
 
 #include "b64url.h"
+#include "captive_dns.h"
+#include "dhcpserver/dhcpserver.h"
 #include "cJSON.h"
 #include "config.h"
 #include "esp_check.h"
@@ -34,6 +36,7 @@ extern const char setup_html_end[]   asm("_binary_setup_html_end");
 static httpd_handle_t  s_httpd;
 static esp_netif_t    *s_ap_netif;
 static bool            s_active;
+static char            s_setup_url[40];
 
 bool rw_prov_active(void)
 {
@@ -102,8 +105,37 @@ static esp_err_t send_error(httpd_req_t *req, const char *status,
 
 /* ------------------------------------------------------------- handlers -- */
 
+/* Absolute redirect keeps the setup UI and relative API calls on the AP origin. */
+static esp_err_t h_captive(httpd_req_t *req, httpd_err_code_t error)
+{
+    (void)error;
+    if (req->method != HTTP_GET)
+        return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Not found");
+    httpd_resp_set_status(req, "302 Found");
+    httpd_resp_set_hdr(req, "Location", s_setup_url);
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    httpd_resp_set_type(req, "text/html; charset=utf-8");
+    /* A nonempty body also supports Apple's captive-network detection. */
+    return httpd_resp_sendstr(req, "<!doctype html><title>remote-wake setup</title>"
+                             "<p>Connect to remote-wake setup.</p>");
+}
+
 static esp_err_t h_root(httpd_req_t *req)
 {
+    char host[64];
+    char expected[24];
+    snprintf(expected, sizeof expected, "%.*s", (int)strlen(s_setup_url) - 8,
+             s_setup_url + 7);
+    size_t host_len = httpd_req_get_hdr_value_len(req, "Host");
+    if (host_len) {
+        if (httpd_req_get_hdr_value_str(req, "Host", host, sizeof host) != ESP_OK)
+            return h_captive(req, HTTPD_404_NOT_FOUND);
+        char *port = strchr(host, ':');
+        if (port)
+            *port = '\0';
+        if (strcmp(host, expected))
+            return h_captive(req, HTTPD_404_NOT_FOUND);
+    }
     httpd_resp_set_type(req, "text/html; charset=utf-8");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     return httpd_resp_send(req, setup_html_start,
@@ -289,6 +321,21 @@ static esp_err_t start_ap(void)
 
     ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_AP), TAG, "set_mode");
     ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_AP, &wc), TAG, "set_config");
+    /* Offer this AP as DNS before clients can obtain a DHCP lease. */
+    esp_netif_ip_info_t ip;
+    ESP_RETURN_ON_ERROR(esp_netif_get_ip_info(s_ap_netif, &ip), TAG, "AP IP");
+    snprintf(s_setup_url, sizeof s_setup_url, "http://" IPSTR "/", IP2STR(&ip.ip));
+    esp_err_t stopped = esp_netif_dhcps_stop(s_ap_netif);
+    if (stopped != ESP_OK && stopped != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STOPPED)
+        return stopped;
+    esp_netif_dns_info_t dns = {.ip.type = ESP_IPADDR_TYPE_V4};
+    dns.ip.u_addr.ip4.addr = ip.ip.addr;
+    ESP_RETURN_ON_ERROR(esp_netif_set_dns_info(s_ap_netif, ESP_NETIF_DNS_MAIN, &dns),
+                        TAG, "AP DNS");
+    dhcps_offer_t offer = OFFER_DNS;
+    ESP_RETURN_ON_ERROR(esp_netif_dhcps_option(s_ap_netif, ESP_NETIF_OP_SET,
+                        ESP_NETIF_DOMAIN_NAME_SERVER, &offer, sizeof offer), TAG, "DNS offer");
+    ESP_RETURN_ON_ERROR(esp_netif_dhcps_start(s_ap_netif), TAG, "DHCP start");
     ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "wifi_start");
     ESP_LOGI(TAG, "SoftAP \"%s\" up on channel %d", ssid, AP_CHANNEL);
     return ESP_OK;
@@ -301,7 +348,9 @@ esp_err_t rw_prov_start(void)
     if (s_active) {
         return ESP_OK;
     }
-    ESP_RETURN_ON_ERROR(start_ap(), TAG, "softap");
+    esp_err_t err = start_ap();
+    if (err != ESP_OK)
+        goto fail;
 
     httpd_config_t hc = HTTPD_DEFAULT_CONFIG();
     hc.server_port      = 80;
@@ -309,10 +358,10 @@ esp_err_t rw_prov_start(void)
     hc.lru_purge_enable = true;
     hc.stack_size       = 5120;
 
-    esp_err_t err = httpd_start(&s_httpd, &hc);
+    err = httpd_start(&s_httpd, &hc);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "httpd_start: %s", esp_err_to_name(err));
-        return err;
+        goto fail;
     }
 
     static const httpd_uri_t uris[] = {
@@ -323,26 +372,39 @@ esp_err_t rw_prov_start(void)
         {.uri = "/finish",  .method = HTTP_POST, .handler = h_finish},
     };
     for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {
-        ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_httpd, &uris[i]), TAG,
-                            "register %s", uris[i].uri);
+        err = httpd_register_uri_handler(s_httpd, &uris[i]);
+        if (err != ESP_OK)
+            goto fail;
     }
 
+    err = httpd_register_err_handler(s_httpd, HTTPD_404_NOT_FOUND, h_captive);
+    if (err != ESP_OK)
+        goto fail;
+    esp_netif_ip_info_t ip;
+    err = esp_netif_get_ip_info(s_ap_netif, &ip);
+    if (err != ESP_OK)
+        goto fail;
+    err = rw_captive_dns_start(ip.ip.addr);
+    if (err != ESP_OK)
+        goto fail;
     s_active = true;
     rw_prov_print_credentials();
     return ESP_OK;
+fail:
+    rw_prov_stop();
+    return err;
 }
 
 esp_err_t rw_prov_stop(void)
 {
-    if (!s_active) {
-        return ESP_OK;
-    }
+    /* Also clean up partial startup so a retry cannot leak listeners/netifs. */
+    rw_captive_dns_stop();
     if (s_httpd) {
         httpd_stop(s_httpd);
         s_httpd = NULL;
     }
-    esp_wifi_stop();
     if (s_ap_netif) {
+        esp_wifi_stop();
         esp_netif_destroy_default_wifi(s_ap_netif);
         s_ap_netif = NULL;
     }

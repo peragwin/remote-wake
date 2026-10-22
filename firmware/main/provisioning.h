@@ -3,7 +3,8 @@
  * Brings up an isolated WPA2 access point named remote-wake-<deviceId[0:4]>
  * with a passphrase derived from the device token (printed on the serial
  * console together with a WIFI: QR payload), and serves a single-page setup
- * UI on http://192.168.4.1.
+ * UI on http://192.168.4.1. DHCP advertises AP-local DNS; HTTP connectivity
+ * probes redirect to the setup UI so clients can offer a captive-portal login.
  *
  * Endpoints (setup mode ONLY — the server is never started on the home
  * network, so /pair simply does not exist there):
@@ -23,10 +24,10 @@
 extern "C" {
 #endif
 
-/** Start SoftAP + HTTP server. Wi-Fi must already be initialized. */
+/** Start SoftAP + captive DNS + HTTP server. Wi-Fi must already be initialized. */
 esp_err_t rw_prov_start(void);
 
-/** Tear the server and the AP down. */
+/** Tear down HTTP, captive DNS and AP (also cleans up partial startup). */
 esp_err_t rw_prov_stop(void);
 
 bool rw_prov_active(void);

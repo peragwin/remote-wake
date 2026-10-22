@@ -64,7 +64,7 @@ a general-purpose start/stop service; call startup functions once.
    once, then selects RAM Wi-Fi storage as in the standalone entry point.
    Do not duplicate these initializations in another application module.
 4. Choose provisioning or normal mode. `rw_prov_start()` owns the setup
-   SoftAP and HTTP server and may restart the device through its setup
+   SoftAP, AP-bound captive DNS responder and HTTP server, and may restart the device through its setup
    endpoints. The standalone application never starts the relay or HID in
    setup mode. Preserve this separation so pairing stays off the home
    network and relay command execution stays disabled during setup.

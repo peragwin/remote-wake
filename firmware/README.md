@@ -201,3 +201,13 @@ boot-health-only mode. No release is downloaded until explicitly enrolled.
 The public component supports automatic, notify-only and pinned policies; the
 standalone adapter defaults to notify-only when configured. Network absence
 alone is not a boot health failure.
+
+Captive setup DNS parsing is tested without hardware, with address/undefined
+behavior sanitizers and a malformed-packet corpus:
+
+```sh
+bash firmware/test_host/provisioning/run.sh
+```
+
+See [setup](../docs/setup.md#captive-setup-portal) for phone auto-open behavior
+and the manual-address fallback.

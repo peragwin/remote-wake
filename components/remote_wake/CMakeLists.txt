@@ -12,6 +12,8 @@ set(RW_SRCS
     "power_btn.c"
     "relay_client.c"
     "provisioning.c"
+    "captive_dns.c"
+    "captive_dns_packet.c"
     "led.c"
     "usb_hid.c"
     "maintenance.c"

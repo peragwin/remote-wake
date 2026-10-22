@@ -23,8 +23,10 @@ On first boot the console prints the device id and the setup-AP credentials.
 1. Host the `app/` directory anywhere static + HTTPS (Cloudflare Pages:
    `npx wrangler pages deploy app`), open it on your phone, **Add to Home
    Screen**, and copy your phone's public key from the pairing screen.
-2. Join the `remote-wake-xxxx` Wi-Fi the device broadcasts; open
-   `http://192.168.4.1`.
+2. Join the `remote-wake-xxxx` Wi-Fi the device broadcasts. Your phone should
+   open the setup page or offer **Sign in to Wi-Fi**. If it does neither, open
+   `http://192.168.4.1` manually. A reconnect may be needed after a firmware
+   update so the phone renews its DHCP/DNS settings.
 3. Enter your home Wi-Fi, the relay URL, and paste the phone public key.
 4. Copy the pairing blob it returns back into the PWA. Device reboots and
    connects; the PWA's presence dot goes green.
@@ -50,3 +52,21 @@ Enable *Allow this device to wake the computer* for the new HID keyboard
 | Wake does nothing | OS wake permission (step 4); BIOS ErP/USB standby power; try wake from sleep vs. full S5 (use power tap for S5). |
 | Power tap does nothing | Swap the two optocoupler output wires (polarity). |
 | `busy` | A power pulse is already in progress; wait for it to finish. |
+
+## Captive setup portal
+
+Setup mode advertises the AP as its DNS server and answers IPv4 lookups with
+the AP address. HTTP connectivity probes redirect to the absolute setup URL;
+IPv6/other DNS queries receive an empty answer. The DNS listener is bound to
+the AP address and stops with provisioning. This follows the DNS/HTTP approach
+in [Espressif's captive portal example](https://github.com/espressif/esp-idf/tree/v5.4.2/examples/protocols/http_server/captive_portal).
+
+The OS decides whether to open a window or show a notification. Detection can
+be disabled or affected by VPN/private DNS settings; the manual address remains
+available. HTTPS is not intercepted, and this isolated setup AP does not provide
+Internet access. DHCP option 114/CAPPORT is not advertised: that mechanism needs
+a separate standards-compliant HTTPS API, not the HTTP setup page.
+
+Validation: S3 standalone build, sanitized DNS tests (including malformed packets),
+and native HTTP-handler checks pass. Actual phone popup behavior must be checked
+on the phone after joining; a firmware build alone cannot establish that.
