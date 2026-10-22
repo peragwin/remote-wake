@@ -25,6 +25,7 @@ const state = {
   sequence: [], // array of chords for the `keys` composer
   busy: false,
   view: 'home',
+  unlockLoaded: false, // the stored unlock text is in the Settings field
 };
 
 let poller = null;
@@ -546,6 +547,7 @@ function bindSettings() {
   $('#toggle-reveal').addEventListener('change', (e) => {
     $('#unlock-text').type = e.target.checked ? 'text' : 'password';
   });
+  $('#btn-unlock-load').addEventListener('click', onLoadUnlock);
   $('#btn-unlock-save').addEventListener('click', onSaveUnlock);
   $('#btn-unlock-clear').addEventListener('click', onClearUnlock);
   $('#key-kid').addEventListener('change', onChangeKid);
@@ -567,11 +569,7 @@ async function renderSettings() {
 
   $('#toggle-haptics').checked = state.settings.hapticsEnabled !== false;
 
-  // unlock text
-  $('#unlock-text').value = state.device?.unlockText || '';
-  $('#toggle-enter').checked = state.device?.unlockEnter !== false;
-  $('#toggle-reveal').checked = false;
-  $('#unlock-text').type = 'password';
+  renderUnlockSettings();
 
   // key
   const key = state.key || (await crypto_.getKeyInfo());
@@ -590,6 +588,42 @@ async function renderSettings() {
   }
 
   renderDeviceList();
+}
+
+/**
+ * The stored unlock text is never put in the field just because Settings
+ * opened: only its length is shown, and Show / edit loads it after the same
+ * identity check that saving needs. (Show then only reveals the field.)
+ */
+function renderUnlockSettings() {
+  const stored = state.device?.unlockText || '';
+  state.unlockLoaded = false;
+  const field = $('#unlock-text');
+  field.value = '';
+  field.type = 'password';
+  field.placeholder = stored ? 'Type to replace the stored text' : 'Not set';
+  $('#toggle-reveal').checked = false;
+  $('#toggle-enter').checked = state.device?.unlockEnter !== false;
+  $('#btn-unlock-load').hidden = !stored;
+  $('#unlock-status').textContent = stored
+    ? `Unlock text is set (${stored.length} characters). Show / edit asks for your identity check first.`
+    : 'No unlock text stored.';
+}
+
+async function onLoadUnlock() {
+  const deviceId = state.device?.deviceId;
+  if (!state.device?.unlockText) return;
+  try {
+    await webauthn.requirePresence();
+  } catch {
+    toast('err', 'Cancelled', 'Identity check is required to see the unlock text.');
+    return;
+  }
+  if (state.device?.deviceId !== deviceId || !state.device.unlockText) return;
+  $('#unlock-text').value = state.device.unlockText;
+  state.unlockLoaded = true;
+  $('#btn-unlock-load').hidden = true;
+  $('#unlock-text').focus();
 }
 
 async function renderDeviceList() {
@@ -615,6 +649,7 @@ async function renderDeviceList() {
             state.device = await store.getActiveDevice();
             poller?.refresh();
             renderDeviceList();
+            renderUnlockSettings();
             toast('info', `Switched to ${d.name}`);
           },
         },
@@ -739,6 +774,9 @@ async function onSaveUnlock() {
     return;
   }
   const text = $('#unlock-text').value;
+  // An empty field over a stored text that was never loaded means "leave the
+  // text alone" (only the Enter switch changes); Remove is how to erase it.
+  const keepText = !text && !!state.device.unlockText && !state.unlockLoaded;
   if (text.length > cmd.LIMITS.typeMaxChars) {
     toast('err', 'Too long', `The type action accepts at most ${cmd.LIMITS.typeMaxChars} characters.`);
     return;
@@ -751,12 +789,15 @@ async function onSaveUnlock() {
     return;
   }
 
-  state.device = await store.saveDevice({
-    deviceId: state.device.deviceId,
-    unlockText: text,
-    unlockEnter: $('#toggle-enter').checked,
-  });
+  const patch = { deviceId: state.device.deviceId, unlockEnter: $('#toggle-enter').checked };
+  if (!keepText) patch.unlockText = text;
+  state.device = await store.saveDevice(patch);
   renderUnlockCard();
+  renderUnlockSettings();
+  if (keepText) {
+    toast('ok', 'Unlock settings saved', 'The stored text is unchanged.');
+    return;
+  }
   toast(
     text ? 'ok' : 'info',
     text ? 'Unlock text saved' : 'Unlock text cleared',
@@ -776,8 +817,8 @@ async function onClearUnlock() {
   });
   if (!ok) return;
   state.device = await store.saveDevice({ deviceId: state.device.deviceId, unlockText: '' });
-  $('#unlock-text').value = '';
   renderUnlockCard();
+  renderUnlockSettings();
   toast('ok', 'Unlock text removed');
 }
 

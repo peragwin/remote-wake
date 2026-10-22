@@ -109,6 +109,8 @@ Implements `docs/security.md`'s "phone is trusted" boundary:
 - **Unlock text.** Stored only on the phone, behind the gate, with a permanent
   amber warning in Settings stating that the relay sees `type` args in the
   clear in v1 and recommending a short PIN and a self-hosted relay.
+  Settings never pre-fills it: it shows only that a text is set and its
+  length, and *Show / edit* loads it into the field after the identity check.
 - **Service worker.** Never caches anything under `/v1/`, never touches
   non-GET requests. A cached command or a stale "online" would both be wrong.
 - **Pairing input** is validated strictly: 16 lowercase hex `deviceId`,

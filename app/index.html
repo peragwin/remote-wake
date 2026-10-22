@@ -223,7 +223,10 @@
     </article>
 
     <article class="card">
-      <div class="card-head"><h2>Unlock text</h2></div>
+      <div class="card-head">
+        <h2>Unlock text</h2>
+        <button class="text-btn" id="btn-unlock-load" type="button" hidden>Show / edit</button>
+      </div>
       <div class="warn" id="unlock-warning">
         <svg viewBox="0 0 24 24" class="warn-ico" aria-hidden="true"><path d="M12 9v5"/><path d="M12 17.5v.5"/><path d="M10.3 4 3 17a2 2 0 0 0 1.7 3h14.6A2 2 0 0 0 21 17L13.7 4a2 2 0 0 0-3.4 0Z"/></svg>
         <div>
@@ -233,6 +236,7 @@
           login and run your own relay.
         </div>
       </div>
+      <p class="card-sub" id="unlock-status">No unlock text stored.</p>
       <label class="field">
         <span class="field-label">Text to type</span>
         <input class="input" id="unlock-text" type="password" autocomplete="off"
