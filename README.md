@@ -12,8 +12,11 @@ acting as a USB keyboard and a hardware finger on your power button.
 
 - **Wake from sleep** — the ESP32-S3 enumerates as a real USB HID keyboard;
   a keypress wakes the host (enable *"Allow this device to wake the computer"*).
-- **Type your login** — send keystroke sequences end-to-end encrypted-in-intent:
-  every command is Ed25519-signed by your phone; the relay can't read or forge them.
+- **Type your login** *(optional, off by default)* — send keystroke sequences
+  end-to-end encrypted-in-intent: every command is Ed25519-signed by your phone;
+  the relay can't read or forge them. Remote typing (`type` / `keys`) is a
+  build option, `CONFIG_RW_ACT_KEYBOARD_INPUT`, which defaults to **off**.
+  Earlier firmware always accepted it — see [`firmware/README.md`](firmware/README.md#remote-typing-type--keys).
 - **Physically press the power button** — a GPIO drives an optocoupler wired
   across the motherboard front-panel `PWR_SW` header. Tap to power on, hold to
   force off. Works even when the OS is wedged.

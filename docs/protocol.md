@@ -82,12 +82,19 @@ Failures produce an `err` response (below) and are rate-limited.
 | `act`        | `args`                          | Effect |
 |--------------|---------------------------------|--------|
 | `ping`       | `{}`                            | Liveness; responds `pong` with uptime + state. |
-| `status`     | `{}`                            | Reports device state. `res`: `{"fw": "x.y.z", "rssi": -55, "usb": "mounted"\|"suspended"\|"down", "pc_power": "on"\|"off"\|"sleep"\|"unknown", "uptime": <seconds>}`. |
+| `status`     | `{}`                            | Reports device state. `res`: `{"fw": "x.y.z", "rssi": -55, "usb": "mounted"\|"suspended"\|"down", "pc_power": "on"\|"off"\|"sleep"\|"unknown", "uptime": <seconds>, "acts": ["ping", "status", ...]}`. `acts` lists every action this firmware build accepts (see below); firmware before it was added omits it, and clients then assume all actions are accepted. |
 | `wake`       | `{}`                            | HID: press+release a zero-side-effect key (Left-Ctrl) twice, 50 ms apart. Wakes a sleeping host. |
-| `type`       | `{"text": "...", "enter": true}`| HID: type UTF-8 text (US layout mapping), optional trailing Enter. Max 256 chars. Used for typing the login password. |
-| `keys`       | `{"seq": [["LGUI","L"],["ENTER"]]}` | HID: sequence of chords, each = list of key names, pressed together then released, 30 ms apart. Max 32 chords. |
+| `type`       | `{"text": "...", "enter": true}`| *Optional.* HID: type UTF-8 text (US layout mapping), optional trailing Enter. Max 256 chars. Used for typing the login password. |
+| `keys`       | `{"seq": [["LGUI","L"],["ENTER"]]}` | *Optional.* HID: sequence of chords, each = list of key names, pressed together then released, 30 ms apart. Max 32 chords. |
 | `power_tap`  | `{"ms": 200}` (50–1000)         | Drive PWR_SW optocoupler for `ms` (default 200) — power on / graceful ACPI signal. |
 | `power_hold` | `{"ms": 6000}` (3000–12000)     | Drive PWR_SW for `ms` (default 6000) — hard power-off. |
+
+`type` and `keys` are enabled only in firmware built with
+`CONFIG_RW_ACT_KEYBOARD_INPUT` (default **off**; earlier firmware always
+enabled them). A build without it treats them as not enabled (step 6): the
+counter is persisted, then the command fails with `unknown_act`, and `status`
+leaves them out of `acts`. All other actions are always enabled; on the
+power-only profile `wake` (and `type`/`keys`, if enabled) answer `usb_down`.
 
 ### `status.pc_power`
 

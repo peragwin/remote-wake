@@ -21,6 +21,24 @@ profile `wake` / `type` / `keys` are still *known* actions but answer
 `usb_down`; `ping`, `status`, `power_tap` and `power_hold` work normally.
 Per-target seeds live in `sdkconfig.defaults.esp32s3` / `.esp32` / `.esp32c3`.
 
+### Remote typing (`type` / `keys`)
+
+`CONFIG_RW_ACT_KEYBOARD_INPUT` (`menuconfig → remote-wake → Allow remote
+typing and key sequences`) defaults to **off**. **This changes the previous
+default: earlier firmware always accepted `type` and `keys`.** With it off the
+device answers both with `unknown_act` (the counter is still consumed, as for
+any disabled action), their HID handlers are not compiled in, and `status`
+omits them from `acts`; `wake`, `power_tap`, `power_hold`, `ping` and `status`
+are unaffected. The app reads `acts` and disables its unlock-text and
+key-sequence controls. To keep remote typing, set the option before building:
+
+```sh
+idf.py menuconfig          # or add CONFIG_RW_ACT_KEYBOARD_INPUT=y to sdkconfig
+```
+
+An existing `sdkconfig` from an older build has no entry for the option and
+picks up the new default (off) on the next build.
+
 ## Embedding
 
 Other ESP-IDF applications can require the `remote_wake` component without
@@ -130,8 +148,9 @@ the action check, so a refused action can never be replayed.
 
 ## Response shapes
 - `ping` → `{"uptime": <s>, "usb": "mounted"|"suspended"|"down"}`
-- `status` → `{"fw": "1.0.1", "rssi": <dBm>, "usb": …, "pc_power": "on"|"off"|"sleep"|"unknown", "uptime": <s>}`
-- `wake` / `type` / `keys` → `{}` on success
+- `status` → `{"fw": "1.0.1", "rssi": <dBm>, "usb": …, "pc_power": "on"|"off"|"sleep"|"unknown", "uptime": <s>, "acts": [<enabled actions>]}`
+- `wake` / `type` / `keys` → `{}` on success (`type` / `keys` only with
+  `CONFIG_RW_ACT_KEYBOARD_INPUT`)
 - `power_tap` / `power_hold` → `{"ms": <actual>}`
 - errors: `bad_request`, `version`, `dev_mismatch`, `unknown_key`, `sig`,
   `stale`, `replay`, `unknown_act`, `bad_args`, `busy`, `usb_down`, `locked`,
