@@ -8,8 +8,35 @@ GPIO5 and the motherboard `PWR_SW` header, S3's OTG USB port into the PC.
 ```sh
 cd relay && npm install && npx wrangler deploy
 ```
-Note the workers.dev URL (or attach your own domain). The relay is
-multi-tenant by deviceId — one deployment serves all your devices.
+`wrangler deploy` prints the Worker's URL. It has the form
+`https://<worker-name>.<account-subdomain>.workers.dev`, where `<worker-name>`
+is `name` in `relay/wrangler.toml` and `<account-subdomain>` is your
+account's workers.dev subdomain. Or attach your own domain (see
+[`relay/README.md`](../relay/README.md#deploy)). The relay is multi-tenant by
+deviceId — one deployment serves all your devices.
+
+To find the URL again later:
+- From `relay/`, run `npx wrangler whoami` to check you are logged in
+  (`npx wrangler login` if not), then `npx wrangler deployments list` to
+  confirm which account holds the deployment.
+- In the Cloudflare dashboard, open **Workers & Pages** and select the
+  Worker. Its `*.workers.dev` URL is under **Settings → Domains & Routes**.
+  The overview page also shows the account's workers.dev subdomain.
+
+Record that URL as the product's default relay, so new devices need no relay
+entry during setup. Use the `https://` form: the device rewrites it to
+`wss://`, and the app only accepts an `https` relay URL from the pairing reply.
+An embedding product sets it in its own `sdkconfig.defaults`:
+
+```
+CONFIG_RW_RELAY_URL="https://<worker-name>.<account-subdomain>.workers.dev"
+```
+
+For the standalone firmware in this public repository, set it in your local
+`sdkconfig` (`idf.py menuconfig` → remote-wake → Default relay base URL) and do
+not commit it. `sdkconfig.defaults` only seeds new configurations, so an
+existing build tree needs the `sdkconfig` change too. The built-in default
+`wss://relay.example.com` is a placeholder and never works.
 
 ## 2. Flash the firmware
 ```sh
@@ -27,7 +54,11 @@ On first boot the console prints the device id and the setup-AP credentials.
    open the setup page or offer **Sign in to Wi-Fi**. If it does neither, open
    `http://192.168.4.1` manually. A reconnect may be needed after a firmware
    update so the phone renews its DHCP/DNS settings.
-3. Enter your home Wi-Fi, the relay URL, and paste the phone public key.
+3. Enter your home Wi-Fi and paste the phone public key. Leave the relay
+   field empty to use the firmware's default relay (shown as the
+   placeholder). Enter a URL only for a device that should use a different
+   relay. It is then stored as an override, and entering the default again
+   removes it.
 4. Copy the pairing blob it returns back into the PWA. Device reboots and
    connects; the PWA's presence dot goes green.
 
@@ -67,6 +98,9 @@ available. HTTPS is not intercepted, and this isolated setup AP does not provide
 Internet access. DHCP option 114/CAPPORT is not advertised: that mechanism needs
 a separate standards-compliant HTTPS API, not the HTTP setup page.
 
-Validation: S3 standalone build, sanitized DNS tests (including malformed packets),
-and native HTTP-handler checks pass. Actual phone popup behavior must be checked
-on the phone after joining; a firmware build alone cannot establish that.
+Validation: the S3 standalone build and the sanitized host DNS tests in
+`firmware/test_host/provisioning` (A/AAAA/other queries, EDNS, bounds and
+malformed packets) pass. The HTTP handlers (Host checks, connectivity-probe
+redirects, unknown requests) have no committed automated tests. Actual phone
+popup behavior must be checked on the phone after joining; a firmware build
+alone cannot establish that.

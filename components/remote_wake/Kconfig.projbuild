@@ -70,8 +70,11 @@ menu "remote-wake"
         default "wss://relay.example.com"
         help
             Base URL of the relay. The device connects to
-            <base>/v1/device/<deviceId>. Overridden by whatever the setup
-            page stores in NVS. http/https are rewritten to ws/wss.
+            <base>/v1/device/<deviceId>. http/https are rewritten to ws/wss;
+            prefer https so the pairing reply works with the app. A relay
+            URL entered on the setup page is stored in NVS as an override;
+            leaving it empty keeps this default. The relay.example.com
+            default is a placeholder: set your deployed relay here.
 
     config RW_TS_WINDOW_SEC
         int "Accepted |ts - now| window in seconds"

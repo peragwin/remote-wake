@@ -98,7 +98,9 @@ The first deploy applies migration `v1`, which creates the SQLite-backed
 or remove the `[[migrations]]` block.
 
 `wrangler deploy` prints the `*.workers.dev` URL; that is a usable relay URL for
-`relayUrl` during pairing. For a stable hostname, add the domain to your
+`relayUrl` during pairing. See [`docs/setup.md`](../docs/setup.md#1-deploy-the-relay-once-5-min)
+for finding it again later and recording it as the firmware's
+`CONFIG_RW_RELAY_URL` default. For a stable hostname, add the domain to your
 Cloudflare account and uncomment the route block in `wrangler.toml`:
 
 ```toml
