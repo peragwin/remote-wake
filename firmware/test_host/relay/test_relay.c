@@ -12,6 +12,8 @@ static int mock_send = INT_MAX;
 static int mock_send_calls;
 static int mock_stop_calls;
 static int mock_destroy_calls;
+static int mock_init_calls;
+static int64_t mock_last_init;
 static int mock_wdt_feeds;
 static int mock_restarts;
 static int mock_actions;
@@ -67,11 +69,11 @@ static void reset(void)
     s_lock_until_us = 0;
     memset(s_fail_ts, 0, sizeof(s_fail_ts));
     s_fail_head = 0;
-    s_relay_down_since_us = 0;
     mock_now = 1000000;
     mock_stop_at = 0;
     mock_send = INT_MAX;
-    mock_send_calls = mock_stop_calls = mock_destroy_calls = 0;
+    mock_send_calls = mock_stop_calls = mock_destroy_calls = mock_init_calls = 0;
+    mock_last_init = 0;
     mock_wdt_feeds = mock_restarts = mock_actions = mock_verify_calls = 0;
     mock_wdt_add_result = ESP_OK;
     mock_ota_enabled=false;mock_ota_offers=0;mock_sent[0]=mock_ota_url[0]=0;
@@ -222,6 +224,23 @@ static void test_task_recovery(void)
     assert(mock_restarts == 0);
     teardown_client();
 
+    /* A relay that never answers is retried in place indefinitely, long past
+     * the removed 15-minute reboot. One cycle is at most the 15 s handshake
+     * wait plus the 60 s backoff cap with +20 % jitter (+1 s slack). */
+    const int64_t outage_us = 60LL * 60 * 1000000, cycle_us = 88LL * 1000000;
+    reset();
+    mock_auto_connect = false;
+    mock_stop_at = mock_now + outage_us;
+    if (setjmp(mock_exit) == 0) {
+        relay_task(NULL);
+        assert(false);
+    }
+    assert(mock_restarts == 0);
+    assert(mock_init_calls >= outage_us / cycle_us);
+    assert(mock_stop_at - mock_last_init <= cycle_us);
+    assert(mock_destroy_calls == mock_stop_calls && mock_stop_calls >= mock_init_calls - 1);
+    teardown_client();
+
     reset();
     mock_stop_at = mock_now + 63000000;
     if (setjmp(mock_exit) == 0) {
@@ -370,7 +389,7 @@ int main(void)
 }
 
 /* Deterministic boundary mocks. A blocked transport advances an independently
- * modelled 30 s watchdog, never the relay task's own reboot timer. */
+ * modelled 30 s watchdog; the relay task itself has no reboot timer. */
 const char *esp_err_to_name(esp_err_t e) { (void)e; return "mock"; }
 int64_t esp_timer_get_time(void) { return mock_now; }
 void esp_restart(void) { ++mock_restarts; longjmp(mock_exit, 1); }
@@ -424,6 +443,8 @@ esp_websocket_client_handle_t esp_websocket_client_init(const esp_websocket_clie
     assert(cfg->disable_auto_reconnect);
     assert(cfg->disable_pingpong_discon);
     assert(cfg->network_timeout_ms == 10000);
+    ++mock_init_calls;
+    mock_last_init = mock_now;
     return &mock_client;
 }
 esp_err_t esp_websocket_register_events(esp_websocket_client_handle_t client, int event,

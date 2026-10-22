@@ -13,13 +13,11 @@ typedef enum {
     RW_WIFI_NONE,
     RW_WIFI_CONNECT,
     RW_WIFI_BOUNCE,
-    RW_WIFI_REBOOT,
 } rw_wifi_action_t;
 
 typedef struct {
     rw_wifi_phase_t phase;
     uint32_t attempts;
-    uint64_t down_since_ms;
     uint64_t deadline_ms;
 } rw_wifi_recovery_t;
 

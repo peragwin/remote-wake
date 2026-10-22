@@ -30,7 +30,11 @@ static bool relay_online, old_session_valid, session_started;
 static uint32_t address;
 static unsigned connects, starts, stops, disconnects, up_notifications,
                 down_notifications, notifications;
-static uint64_t connect_at[700];
+static uint64_t connect_at[1024];
+/* Any driver start/connect call; the largest gap bounds how long recovery
+ * can go quiet during an outage. */
+static uint64_t last_attempt_ms, max_attempt_gap_ms;
+static bool attempted;
 static jmp_buf task_exit;
 static void (*created_task)(void *);
 static void *created_arg;
@@ -101,6 +105,15 @@ static void advance(uint64_t ms)
     }
 }
 
+static void note_attempt(void)
+{
+    if (attempted && clock_ms - last_attempt_ms > max_attempt_gap_ms) {
+        max_attempt_gap_ms = clock_ms - last_attempt_ms;
+    }
+    attempted = true;
+    last_attempt_ms = clock_ms;
+}
+
 const char *esp_err_to_name(esp_err_t err) { (void)err; return "mock"; }
 esp_err_t esp_event_handler_instance_register(esp_event_base_t base, int32_t id,
     void (*handler)(void *, esp_event_base_t, int32_t, void *), void *arg,
@@ -135,6 +148,7 @@ esp_err_t esp_wifi_start(void)
 {
     assert(!in_callback && wdt_registered);
     starts++;
+    note_attempt();
     if (scenario == START_FAIL) return ESP_FAIL;
     driver_up = true;
     event(0);
@@ -145,6 +159,7 @@ esp_err_t esp_wifi_connect(void)
     assert(!in_callback && driver_up && wdt_registered);
     assert(connects < sizeof(connect_at) / sizeof(connect_at[0]));
     connect_at[connects++] = clock_ms;
+    note_attempt();
     if (scenario == CONNECT_FAIL || scenario == STOP_FAIL || scenario == FAIL_THEN_GOT_IP) return ESP_FAIL;
     if (scenario == DHCP_STALL) associated = netif_up = true;
     if (scenario == NETIF_DOWN_CACHED_IP) {
@@ -167,6 +182,8 @@ esp_err_t esp_task_wdt_add(TaskHandle_t task)
 esp_err_t esp_task_wdt_reset(void)
 { assert(wdt_registered); wdt_resets++; return ESP_OK; }
 int64_t esp_timer_get_time(void) { return (int64_t)clock_ms * 1000; }
+/* Recovery must never restart the controller; a call is recorded and fails
+ * every scenario. */
 void esp_restart(void) { rebooted = true; longjmp(task_exit, 1); }
 uint32_t ulTaskNotifyTake(int clear, TickType_t ticks)
 {
@@ -211,60 +228,87 @@ static void run(scenario_t test, uint64_t duration)
     atomic_store_explicit(&s_outage_generation, 0, memory_order_relaxed);
     address = 0;
     connects = starts = stops = disconnects = up_notifications = down_notifications = notifications = 0;
+    last_attempt_ms = max_attempt_gap_ms = 0;
+    attempted = false;
     assert(rw_wifi_station_start() == ESP_OK);
     if (setjmp(task_exit) == 0) created_task(created_arg);
     assert(notifications > 0 && wdt_registered && wdt_resets > 1);
+    assert(!rebooted);
+}
+
+/* One attempt deadline (30 s) plus the capped retry delay (10 s), with slack
+ * for the 1 s station poll and the 100 ms disconnect settle. */
+#define MAX_RETRY_GAP_MS 42000u
+/* Six times the removed ten-minute reboot deadline. */
+#define LONG_OUTAGE_MS 3600000u
+
+#define MIN_LONG_ATTEMPTS (LONG_OUTAGE_MS / MAX_RETRY_GAP_MS)
+
+static void assert_still_retrying(void)
+{
+    assert(attempted && max_attempt_gap_ms <= MAX_RETRY_GAP_MS);
+    assert(finish_ms - last_attempt_ms <= MAX_RETRY_GAP_MS);
 }
 
 int main(void)
 {
-    run(NO_EVENTS, 601000);
-    assert(rebooted && connects >= 12 && stops >= 2);
+    /* Persistent outages never reboot: connects keep coming at a bounded
+     * interval and the driver keeps bouncing long after the old deadline. */
+    run(NO_EVENTS, LONG_OUTAGE_MS);
+    assert(connects >= MIN_LONG_ATTEMPTS && stops >= connects / 6 - 1);
     assert(connect_at[0] == 0 && connect_at[1] >= 31000);
     assert(up_notifications == 0);
+    assert_still_retrying();
 
-    run(DHCP_STALL, 601000);
-    assert(rebooted && connects >= 12 && stops >= 2 && up_notifications == 0);
+    run(DHCP_STALL, LONG_OUTAGE_MS);
+    assert(connects >= MIN_LONG_ATTEMPTS && stops >= connects / 6 - 1);
+    assert(up_notifications == 0);
+    assert_still_retrying();
 
     /* A valid IP supersedes the connection deadline and every pending retry;
-     * a stale event cannot undo it. Stay healthy past the reboot deadline. */
+     * a stale event cannot undo it. Stay healthy past ten minutes. */
     run(HEALTHY_STALE_EVENT, 650000);
-    assert(!rebooted && connects == 1 && stops == 0 && disconnects == 0);
+    assert(connects == 1 && stops == 0 && disconnects == 0);
     assert(up_notifications == 2 && down_notifications == 1 && relay_online);
 
     run(BRIEF_OUTAGE, 20000);
-    assert(!rebooted && connects == 1 && stops == 0 && disconnects == 0);
+    assert(connects == 1 && stops == 0 && disconnects == 0);
     assert(up_notifications == 2 && down_notifications == 1 && relay_online);
     assert(!old_session_valid);
 
     run(LOST_LINK_NO_EVENT, 140000);
-    assert(!rebooted && connects >= 3);
+    assert(connects >= 3);
     assert(connect_at[1] >= 61000 && connect_at[1] < 63000);
     assert(up_notifications == 2 && down_notifications >= 1 && relay_online);
 
     run(LOST_IP_NO_EVENT, 140000);
-    assert(!rebooted && connects >= 3 && disconnects > 0);
+    assert(connects >= 3 && disconnects > 0);
     assert(up_notifications == 2 && down_notifications >= 1 && relay_online);
 
-    run(CONNECT_FAIL, 601000);
-    assert(rebooted && connects > 20 && stops > 2);
+    run(CONNECT_FAIL, LONG_OUTAGE_MS);
+    assert(connects >= MIN_LONG_ATTEMPTS && stops >= connects / 6 - 1);
+    assert_still_retrying();
 
-    run(START_FAIL, 601000);
-    assert(rebooted && starts > 20 && connects == 0);
+    run(START_FAIL, LONG_OUTAGE_MS);
+    assert(starts >= MIN_LONG_ATTEMPTS && connects == 0);
+    assert_still_retrying();
 
-    run(STOP_FAIL, 601000);
-    assert(rebooted && connects > 20 && stops > 2);
+    run(STOP_FAIL, LONG_OUTAGE_MS);
+    assert(connects >= MIN_LONG_ATTEMPTS && stops >= connects / 6 - 1);
+    assert_still_retrying();
 
     run(ADDRESS_CHANGE, 20000);
-    assert(!rebooted && connects == 1 && stops == 0);
+    assert(connects == 1 && stops == 0);
     assert(up_notifications == 2 && down_notifications == 1);
 
     run(FAIL_THEN_GOT_IP, 650000);
-    assert(!rebooted && connects == 1 && stops == 0 && disconnects == 0);
+    assert(connects == 1 && stops == 0 && disconnects == 0);
     assert(up_notifications == 1 && down_notifications == 0);
 
-    run(NETIF_DOWN_CACHED_IP, 601000);
-    assert(rebooted && connects >= 12 && stops >= 2 && up_notifications == 0);
+    run(NETIF_DOWN_CACHED_IP, LONG_OUTAGE_MS);
+    assert(connects >= MIN_LONG_ATTEMPTS && stops >= connects / 6 - 1);
+    assert(up_notifications == 0);
+    assert_still_retrying();
 
     puts("Wi-Fi recovery: 12 production adapter/policy scenarios passed");
     return 0;

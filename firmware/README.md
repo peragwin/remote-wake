@@ -137,6 +137,13 @@ project sets `CONFIG_ESP_TASK_WDT_TIMEOUT_S=30`; do not lower it below ~20 s.
 recover a blocked driver or WebSocket teardown call. Existing build trees
 must enable this in `sdkconfig` too; `sdkconfig.defaults` only seeds new
 configurations. The build rejects an uninitialized or logging-only watchdog.
+The watchdog only bounds a genuinely hung task. There is no timed recovery
+reboot: a restart cannot fix an outside cause (relay down, DNS, wrong URL,
+rejected token), and each reboot re-enumerates USB, which can wake a sleeping
+PC. Instead, Wi-Fi gives each attempt 30 s, retries after a delay capped at
+10 s and restarts the driver every sixth attempt; the relay client recreates
+its WebSocket client with backoff capped at 60 s (±20 % jitter). Both keep
+doing so for as long as the outage lasts.
 The relay waits up to 20 s for a command response and the app allows 25 s;
 deploy those companion changes to support the maximum 12 s power hold.
 Commands are executed one at a time from the single relay task, so an

@@ -5,7 +5,6 @@
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_netif.h"
-#include "esp_system.h"
 #include "esp_task_wdt.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
@@ -61,8 +60,8 @@ static void station_task(void *arg)
     esp_netif_t *sta = arg;
     /* The creator publishes our handle before allowing driver startup. */
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-    /* A blocked driver/netif API must also recover: the ten-minute policy
-     * deadline cannot run while this task is stuck inside such a call. */
+    /* A blocked driver/netif API must also recover: policy deadlines cannot
+     * run while this task is stuck inside such a call. */
     ESP_ERROR_CHECK(esp_task_wdt_add(NULL));
     rw_wifi_recovery_t recovery;
     rw_wifi_recovery_init(&recovery, now_ms());
@@ -103,12 +102,6 @@ static void station_task(void *arg)
         }
 
         rw_wifi_action_t action = rw_wifi_recovery_step(&recovery, now_ms(), up);
-        if (action == RW_WIFI_REBOOT) {
-            ESP_LOGE(TAG, "Wi-Fi unavailable for 10 minutes; rebooting");
-            esp_restart();
-            vTaskDelete(NULL);
-            return;
-        }
         if (action == RW_WIFI_CONNECT || action == RW_WIFI_BOUNCE) {
             ESP_LOGW(TAG, "Wi-Fi recovery attempt %lu%s",
                      (unsigned long)recovery.attempts,

@@ -820,9 +820,10 @@ static void teardown_client(void)
     asm_reset();
 }
 
-#define RELAY_DOWN_REBOOT_SEC  900 /* 15 minutes of network up but relay unreachable -> reboot recovery */
-static int64_t s_relay_down_since_us;
-
+/* An unreachable relay never reboots the controller: a restart cannot fix an
+ * outside cause (relay down, DNS, URL, rejected token) and re-enumerating USB
+ * can wake the host. The loop recreates the client indefinitely at the capped
+ * backoff; the task watchdog only bounds a genuinely blocked call. */
 static void relay_task(void *arg)
 {
     (void)arg;
@@ -846,23 +847,11 @@ static void relay_task(void *arg)
         esp_task_wdt_reset();
 
         if (!link_snapshot().net_up) {
-            s_relay_down_since_us = 0;
             if (s_client) {
                 teardown_client();
             }
             vTaskDelay(pdMS_TO_TICKS(500));
             continue;
-        }
-
-        /* Watchdog: if network is up but relay connection fails continuously for >=15 min, reboot */
-        if (s_relay_down_since_us > 0) {
-            int64_t down_sec = (esp_timer_get_time() - s_relay_down_since_us) / 1000000LL;
-            if (down_sec >= RELAY_DOWN_REBOOT_SEC) {
-                ESP_LOGE(TAG, "relay unreachable for %lld s with network up — rebooting for recovery",
-                         (long long)down_sec);
-                vTaskDelay(pdMS_TO_TICKS(100));
-                esp_restart();
-            }
         }
 
         sntp_start_once();
@@ -900,9 +889,6 @@ static void relay_task(void *arg)
         s_client = esp_websocket_client_init(&cfg);
         if (!s_client) {
             ESP_LOGE(TAG, "client init failed");
-            if (s_relay_down_since_us == 0) {
-                s_relay_down_since_us = esp_timer_get_time();
-            }
             goto backoff_delay;
         }
         if (esp_websocket_register_events(s_client, WEBSOCKET_EVENT_ANY,
@@ -938,7 +924,6 @@ static void relay_task(void *arg)
         }
         portEXIT_CRITICAL(&s_state_mux);
         backoff = BACKOFF_MIN_MS;   /* a good connection resets the ramp */
-        s_relay_down_since_us = 0;  /* connection succeeded, clear down timer */
         rw_led_set(locked_out() ? RW_LED_LOCKOUT : RW_LED_CONNECTED);
         next_probe_us = esp_timer_get_time() + (int64_t)WS_PING_SEC * 1000000LL;
 
@@ -993,9 +978,6 @@ static void relay_task(void *arg)
 
     teardown:
         rw_led_set(RW_LED_FAULT);
-        if (s_relay_down_since_us == 0) {
-            s_relay_down_since_us = esp_timer_get_time();
-        }
         teardown_client();
 
     backoff_delay: {

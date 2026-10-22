@@ -1,8 +1,11 @@
 #include "wifi_recovery.h"
 
 #define WIFI_ATTEMPT_MS 30000u
-#define WIFI_REBOOT_MS 600000u
 #define WIFI_BOUNCE_EVERY 6u
+
+/* Recovery never reboots: a restart cannot fix an outside cause and
+ * re-enumerating USB can wake the host. Attempts continue indefinitely at the
+ * capped delay, with a driver bounce every WIFI_BOUNCE_EVERY attempts. */
 
 static uint32_t retry_delay_ms(uint32_t attempts)
 {
@@ -13,7 +16,6 @@ void rw_wifi_recovery_init(rw_wifi_recovery_t *s, uint64_t now_ms)
 {
     *s = (rw_wifi_recovery_t){
         .phase = RW_WIFI_WAIT,
-        .down_since_ms = now_ms,
         .deadline_ms = now_ms,
     };
 }
@@ -33,11 +35,7 @@ rw_wifi_action_t rw_wifi_recovery_step(rw_wifi_recovery_t *s,
         return RW_WIFI_NONE;
     }
     if (s->phase == RW_WIFI_ONLINE) {
-        s->down_since_ms = now_ms;
         rw_wifi_recovery_failed(s, now_ms);
-    }
-    if (now_ms - s->down_since_ms >= WIFI_REBOOT_MS) {
-        return RW_WIFI_REBOOT;
     }
     if (now_ms < s->deadline_ms) {
         return RW_WIFI_NONE;
