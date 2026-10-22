@@ -18,7 +18,6 @@
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_system.h"
-#include "esp_timer.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -29,6 +28,7 @@
 #include "relay_client.h"
 #include "sdkconfig.h"
 #include "usb_hid.h"
+#include "wifi_station.h"
 
 static const char *TAG = "rw.main";
 
@@ -40,166 +40,6 @@ static const char *TAG = "rw.main";
 static RTC_NOINIT_ATTR uint32_t s_boot_to_setup;
 
 static bool s_setup_mode;
-static int  s_wifi_retries;
-static esp_timer_handle_t s_reconnect_timer;
-static int64_t s_wifi_disconnected_since_us;
-
-#define WIFI_RETRY_FAST_MS       1000
-#define WIFI_RETRY_SLOW_MS       5000
-#define WIFI_RETRY_LONG_MS       10000
-#define WIFI_FAST_RETRIES        5
-#define WIFI_DRIVER_RESET_AFTER  20   /* bounce wifi driver after ~2 min */
-#define WIFI_REBOOT_AFTER_SEC    600  /* 10 min continuous failure -> reboot recovery */
-
-/* ------------------------------------------------------------- wifi sta -- */
-
-static void schedule_wifi_reconnect(uint32_t delay_ms)
-{
-    if (s_reconnect_timer) {
-        esp_timer_stop(s_reconnect_timer);
-        esp_timer_start_once(s_reconnect_timer, (uint64_t)delay_ms * 1000);
-    }
-}
-
-static void reconnect_cb(void *arg)
-{
-    (void)arg;
-    if (s_setup_mode) {
-        return;
-    }
-
-    /* Watchdog: if Wi-Fi has been continuously disconnected for >=10 min, reboot */
-    if (s_wifi_disconnected_since_us > 0) {
-        int64_t down_sec = (esp_timer_get_time() - s_wifi_disconnected_since_us) / 1000000LL;
-        if (down_sec >= WIFI_REBOOT_AFTER_SEC) {
-            ESP_LOGE(TAG, "Wi-Fi down for %lld s — rebooting for recovery", (long long)down_sec);
-            vTaskDelay(pdMS_TO_TICKS(100));
-            esp_restart();
-        }
-    }
-
-    /* Escalating recovery: periodically bounce the Wi-Fi driver */
-    if (s_wifi_retries > 0 && (s_wifi_retries % WIFI_DRIVER_RESET_AFTER) == 0) {
-        ESP_LOGW(TAG, "Wi-Fi retry count %d — bouncing Wi-Fi driver", s_wifi_retries);
-        esp_wifi_disconnect();
-        esp_wifi_stop();
-        vTaskDelay(pdMS_TO_TICKS(100));
-        esp_wifi_start();
-        return; /* WIFI_EVENT_STA_START handler will initiate connect */
-    }
-
-    /* Clear any stuck connection state machine */
-    if (s_wifi_retries > WIFI_FAST_RETRIES) {
-        esp_wifi_disconnect();
-    }
-
-    esp_err_t err = esp_wifi_connect();
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "esp_wifi_connect failed (%s) — rescheduling retry",
-                 esp_err_to_name(err));
-        s_wifi_retries++;
-        int delay_ms = s_wifi_retries < WIFI_FAST_RETRIES ? WIFI_RETRY_FAST_MS :
-                       (s_wifi_retries < WIFI_DRIVER_RESET_AFTER ? WIFI_RETRY_SLOW_MS : WIFI_RETRY_LONG_MS);
-        schedule_wifi_reconnect(delay_ms);
-    }
-}
-
-static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id,
-                               void *data)
-{
-    (void)arg;
-    if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
-        esp_err_t err = esp_wifi_connect();
-        if (err != ESP_OK) {
-            ESP_LOGW(TAG, "esp_wifi_connect on STA_START failed (%s) — scheduling retry",
-                     esp_err_to_name(err));
-            schedule_wifi_reconnect(WIFI_RETRY_FAST_MS);
-        }
-        return;
-    }
-    if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
-        wifi_event_sta_disconnected_t *ev = (wifi_event_sta_disconnected_t *)data;
-        rw_relay_notify_network(false);
-        rw_led_set(RW_LED_FAULT);
-
-        if (s_wifi_disconnected_since_us == 0) {
-            s_wifi_disconnected_since_us = esp_timer_get_time();
-        }
-
-        s_wifi_retries++;
-        int delay_ms = s_wifi_retries < WIFI_FAST_RETRIES ? WIFI_RETRY_FAST_MS :
-                       (s_wifi_retries < WIFI_DRIVER_RESET_AFTER ? WIFI_RETRY_SLOW_MS : WIFI_RETRY_LONG_MS);
-        ESP_LOGW(TAG, "wifi disconnected (reason=%d), retry %d in %d ms",
-                 ev ? ev->reason : -1, s_wifi_retries, delay_ms);
-        schedule_wifi_reconnect(delay_ms);
-        return;
-    }
-    if (base == IP_EVENT && id == IP_EVENT_STA_LOST_IP) {
-        ESP_LOGW(TAG, "IP lost (DHCP lease expired or renewed address invalid)");
-        rw_relay_notify_network(false);
-        rw_led_set(RW_LED_FAULT);
-        if (s_wifi_disconnected_since_us == 0) {
-            s_wifi_disconnected_since_us = esp_timer_get_time();
-        }
-        /* Disconnect Wi-Fi layer to force full re-association and DHCP renegotiation */
-        esp_wifi_disconnect();
-        schedule_wifi_reconnect(WIFI_RETRY_FAST_MS);
-        return;
-    }
-    if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
-        ip_event_got_ip_t *ev = (ip_event_got_ip_t *)data;
-        ESP_LOGI(TAG, "got ip " IPSTR, IP2STR(&ev->ip_info.ip));
-        s_wifi_retries = 0;
-        s_wifi_disconnected_since_us = 0;
-        rw_relay_notify_network(true);
-        return;
-    }
-}
-
-static esp_err_t start_station(void)
-{
-    char ssid[RW_SSID_MAXLEN] = {0};
-    char pass[RW_PASS_MAXLEN] = {0};
-    if (rw_config_get_wifi(ssid, sizeof(ssid), pass, sizeof(pass)) != ESP_OK ||
-        ssid[0] == '\0') {
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    esp_netif_t *sta = esp_netif_create_default_wifi_sta();
-    if (!sta) {
-        return ESP_FAIL;
-    }
-
-    const esp_timer_create_args_t targs = {
-        .callback = reconnect_cb,
-        .name     = "rw_wifi_retry",
-    };
-    ESP_ERROR_CHECK(esp_timer_create(&targs, &s_reconnect_timer));
-
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(
-        WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event_handler, NULL, NULL));
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(
-        IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_event_handler, NULL, NULL));
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(
-        IP_EVENT, IP_EVENT_STA_LOST_IP, wifi_event_handler, NULL, NULL));
-
-    /* SSIDs may legitimately fill all 32 bytes with no NUL, so copy by
-     * length rather than as a C string. */
-    wifi_config_t wc = {0};
-    memcpy(wc.sta.ssid, ssid, strnlen(ssid, sizeof(wc.sta.ssid)));
-    memcpy(wc.sta.password, pass, strnlen(pass, sizeof(wc.sta.password)));
-    wc.sta.threshold.authmode = pass[0] ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
-    wc.sta.pmf_cfg.capable    = true;
-
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wc));
-    /* The relay link matters more than a few mA of idle current: disable modem sleep. */
-    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
-    ESP_ERROR_CHECK(esp_wifi_start());
-    ESP_LOGI(TAG, "connecting to \"%s\"", ssid);
-    return ESP_OK;
-}
-
 /* ----------------------------------------------------------- boot button -- */
 
 static void reboot_into_setup(void)
@@ -326,7 +166,10 @@ void app_main(void)
 
     ESP_ERROR_CHECK(rw_relay_start());
 
-    err = start_station();
+    err = rw_wifi_station_start();
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_ERROR_CHECK(err);
+    }
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "no Wi-Fi credentials — hold BOOT for 5 s to re-enter "
                       "setup mode");

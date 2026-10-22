@@ -1,10 +1,10 @@
 #include "usb_hid.h"
 
-#include <stdlib.h>
 #include <string.h>
 #include <strings.h>
 
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "sdkconfig.h"
 
 static const char *TAG = "rw.hid";
@@ -36,6 +36,7 @@ esp_err_t rw_hid_keys(const cJSON *seq)
 #else /* full profile ------------------------------------------------------ */
 
 #include "class/hid/hid_device.h"
+#include <stdatomic.h>
 #include "config.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -116,10 +117,99 @@ void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id,
 /* -------------------------------------------------------------- state --- */
 
 static SemaphoreHandle_t s_lock;
-static bool              s_installed;
+static atomic_bool       s_installed; /* publishes initialized state to worker */
+static TaskHandle_t      s_recovery_task;
+/* Only the action/recovery task holding s_lock may submit reports or change
+ * s_need_release. Keep this debt until a neutral report completes, including
+ * across disconnects, suspend, failed submissions and completion timeouts. */
+static bool s_need_release = true;
+static portMUX_TYPE s_report_mux = portMUX_INITIALIZER_UNLOCKED;
+static uint8_t s_expected_report[9]; /* report ID + keyboard report */
+static bool s_waiting_report;
+static bool s_report_complete;
+static bool s_neutral_completed; /* completed release not yet claimed by owner */
+static int64_t s_action_deadline; /* s_lock; zero during background cleanup */
+static uint32_t s_bus_epoch; /* callback lifecycle, protected by s_report_mux */
+static uint32_t s_action_epoch; /* s_lock */
+static bool s_action_epoch_valid;
+static bool s_reenumerating; /* protected by s_report_mux */
+
+static void recovery_task(void *arg);
+
+/* This callback runs in TinyUSB's task. Never wait or submit from here. Match
+ * the complete report so a late key-down cannot acknowledge a recovery key-up.
+ * A short/failed transfer must not count as a completed keyboard report. */
+void tud_hid_report_complete_cb(uint8_t instance, uint8_t const *report,
+                                uint16_t len)
+{
+    portENTER_CRITICAL(&s_report_mux);
+    if (instance == HID_INSTANCE && s_waiting_report) {
+        s_report_complete = len == sizeof(s_expected_report) &&
+                            memcmp(report, s_expected_report, len) == 0;
+        s_neutral_completed = s_report_complete;
+        for (size_t i = 1; i < sizeof(s_expected_report); ++i) {
+            if (s_expected_report[i]) {
+                s_neutral_completed = false;
+            }
+        }
+        s_waiting_report = false;
+    }
+    portEXIT_CRITICAL(&s_report_mux);
+}
+
+/* Available in newer TinyUSB versions; an unused application symbol with
+ * older versions, where short completions are rejected above. */
+void tud_hid_report_failed_cb(uint8_t instance, hid_report_type_t report_type,
+                              uint8_t const *report, uint16_t xferred_bytes)
+{
+    (void)report;
+    (void)xferred_bytes;
+    if (instance != HID_INSTANCE || report_type != HID_REPORT_TYPE_INPUT) {
+        return;
+    }
+    portENTER_CRITICAL(&s_report_mux);
+    s_waiting_report = false;
+    s_report_complete = false;
+    s_neutral_completed = false;
+    portEXIT_CRITICAL(&s_report_mux);
+}
+
+/* esp_tinyusb 1.x leaves lifecycle callbacks to the application (except its
+ * MSC helper, disabled in our HID-only configuration). Observe actual events,
+ * not just polled mounted state: reset/re-enumeration can happen between polls
+ * and cancel a report without ever delivering its completion callback. */
+static void lifecycle_event(bool endpoint_reset, bool mounted)
+{
+    portENTER_CRITICAL(&s_report_mux);
+    ++s_bus_epoch;
+    if (endpoint_reset) {
+        s_waiting_report = false;
+        s_report_complete = false;
+        s_neutral_completed = false;
+    }
+    if (mounted) {
+        s_reenumerating = false;
+    }
+    portEXIT_CRITICAL(&s_report_mux);
+}
+
+void tud_mount_cb(void) { lifecycle_event(true, true); }
+void tud_umount_cb(void) { lifecycle_event(true, false); }
+void tud_suspend_cb(bool remote_wakeup_en)
+{
+    (void)remote_wakeup_en;
+    lifecycle_event(false, false);
+}
+void tud_resume_cb(void) { lifecycle_event(false, false); }
 
 bool rw_hid_available(void) { return s_installed; }
-bool rw_hid_mounted(void)   { return s_installed && tud_mounted(); }
+bool rw_hid_mounted(void)
+{
+    portENTER_CRITICAL(&s_report_mux);
+    bool reenumerating = s_reenumerating;
+    portEXIT_CRITICAL(&s_report_mux);
+    return s_installed && !reenumerating && tud_mounted();
+}
 bool rw_hid_suspended(void) { return s_installed && tud_suspended(); }
 
 esp_err_t rw_hid_init(void)
@@ -137,6 +227,15 @@ esp_err_t rw_hid_init(void)
         return ESP_ERR_NO_MEM;
     }
 
+    /* Allocate recovery before installing the driver: init must never report
+     * success without a way to clear a held key after the caller has returned. */
+    if (xTaskCreate(recovery_task, "hid-release", 3072, NULL, 5,
+                    &s_recovery_task) != pdPASS) {
+        vSemaphoreDelete(s_lock);
+        s_lock = NULL;
+        return ESP_ERR_NO_MEM;
+    }
+
     const tinyusb_config_t tusb_cfg = {
         .device_descriptor        = &s_dev_desc,
         .string_descriptor        = s_str_desc,
@@ -148,6 +247,8 @@ esp_err_t rw_hid_init(void)
     esp_err_t err = tinyusb_driver_install(&tusb_cfg);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "tinyusb_driver_install: %s", esp_err_to_name(err));
+        vTaskDelete(s_recovery_task);
+        s_recovery_task = NULL;
         vSemaphoreDelete(s_lock);
         s_lock = NULL;
         return err;
@@ -159,17 +260,35 @@ esp_err_t rw_hid_init(void)
 
 /* ---------------------------------------------------------- report i/o -- */
 
-/* Wait for the HID endpoint to be free. */
-static bool wait_ready(uint32_t timeout_ms)
+/* Actual elapsed time, independent of CONFIG_FREERTOS_HZ. In particular,
+ * pdMS_TO_TICKS(5) and (8) are zero with IDF's default 100 Hz tick. */
+static TickType_t delay_ticks(uint32_t ms)
 {
-    const uint32_t step = 5;
-    for (uint32_t waited = 0; waited <= timeout_ms; waited += step) {
-        if (tud_hid_ready()) {
-            return true;
-        }
-        vTaskDelay(pdMS_TO_TICKS(step));
+    TickType_t ticks = pdMS_TO_TICKS(ms);
+    return ticks ? ticks : 1;
+}
+
+static esp_err_t bus_state(void)
+{
+    portENTER_CRITICAL(&s_report_mux);
+    bool reenumerating = s_reenumerating;
+    bool changed = s_action_epoch_valid && s_action_epoch != s_bus_epoch;
+    portEXIT_CRITICAL(&s_report_mux);
+    if (reenumerating) {
+        return ESP_ERR_NOT_FOUND;
     }
-    return false;
+    if (!tud_mounted()) {
+        /* Unmount resets the endpoint and cancels its transfer. Do not reuse
+         * the endpoint after a mere timeout until its callback has run: the
+         * TinyUSB callback's report pointer aliases its submission buffer. */
+        portENTER_CRITICAL(&s_report_mux);
+        s_waiting_report = false;
+        s_report_complete = false;
+        s_neutral_completed = false;
+        portEXIT_CRITICAL(&s_report_mux);
+        return ESP_ERR_NOT_FOUND;
+    }
+    return (tud_suspended() || changed) ? ESP_ERR_TIMEOUT : ESP_OK;
 }
 
 /* Ask the host to resume the bus, then give it time to actually do so. */
@@ -178,7 +297,7 @@ static bool wait_ready(uint32_t timeout_ms)
 static esp_err_t ensure_awake(void)
 {
     if (!tud_mounted()) {
-        return ESP_ERR_NOT_FOUND;
+        return bus_state();
     }
     if (!tud_suspended()) {
         return ESP_OK;
@@ -189,27 +308,214 @@ static esp_err_t ensure_awake(void)
         ESP_LOGW(TAG, "remote wakeup refused by host");
         return ESP_ERR_TIMEOUT;
     }
-    for (int i = 0; i < 100 && tud_suspended(); i++) {  /* up to 1 s */
-        vTaskDelay(pdMS_TO_TICKS(10));
+    const int64_t deadline = esp_timer_get_time() + 1000000;
+    while (tud_mounted() && tud_suspended() && esp_timer_get_time() < deadline) {
+        vTaskDelay(1);
     }
-    return tud_suspended() ? ESP_ERR_TIMEOUT : ESP_OK;
+    return bus_state();
 }
 
 static esp_err_t send_report(uint8_t modifier, uint8_t keycode[6])
 {
-    if (!wait_ready(200)) {
+    int64_t deadline = esp_timer_get_time() + 200000;
+    if (s_action_deadline && s_action_deadline < deadline) {
+        deadline = s_action_deadline;
+    }
+    esp_err_t err;
+    for (;;) {
+        err = bus_state();
+        portENTER_CRITICAL(&s_report_mux);
+        bool pending = s_waiting_report;
+        portEXIT_CRITICAL(&s_report_mux);
+        if (err != ESP_OK || (!pending && tud_hid_ready()) ||
+            esp_timer_get_time() >= deadline) {
+            break;
+        }
+        vTaskDelay(1);
+    }
+    if (err != ESP_OK) {
+        return err;
+    }
+    if (esp_timer_get_time() >= deadline) {
         return ESP_ERR_TIMEOUT;
     }
-    if (!tud_hid_keyboard_report(KBD_REPORT_ID, modifier, keycode)) {
-        return ESP_FAIL;
+
+    bool neutral = modifier == 0;
+    for (size_t i = 0; i < 6; ++i) {
+        if (keycode[i]) {
+            neutral = false;
+        }
     }
-    return ESP_OK;
+
+    portENTER_CRITICAL(&s_report_mux);
+    /* A timed-out release may have completed while this cleanup waited for
+     * its callback. Claim that completion instead of queueing a duplicate
+     * release that could consume another full timeout on a slow host. */
+    if (neutral && s_neutral_completed) {
+        s_neutral_completed = false;
+        portEXIT_CRITICAL(&s_report_mux);
+        return ESP_OK;
+    }
+    s_expected_report[0] = KBD_REPORT_ID;
+    s_expected_report[1] = modifier;
+    s_expected_report[2] = 0; /* reserved */
+    memcpy(s_expected_report + 3, keycode, 6);
+    s_report_complete = false;
+    s_neutral_completed = false;
+    s_waiting_report = true;
+    portEXIT_CRITICAL(&s_report_mux);
+
+    /* Set debt even if submission fails: do not assume what reached the host. */
+    s_need_release = true;
+    if (!tud_hid_keyboard_report(KBD_REPORT_ID, modifier, keycode)) {
+        err = ESP_FAIL;
+    } else {
+        for (;;) {
+            err = bus_state();
+            portENTER_CRITICAL(&s_report_mux);
+            bool complete = s_report_complete;
+            bool pending = s_waiting_report;
+            portEXIT_CRITICAL(&s_report_mux);
+            if (err != ESP_OK || complete) {
+                break;
+            }
+            if (!pending) {
+                err = ESP_FAIL; /* callback reported a short/invalid report */
+                break;
+            }
+            if (esp_timer_get_time() >= deadline) {
+                err = ESP_ERR_TIMEOUT;
+                break;
+            }
+            vTaskDelay(1);
+        }
+    }
+    if (err == ESP_FAIL) {
+        /* A rejected submission has no callback. A timed-out accepted one
+         * keeps ownership of TinyUSB's report buffer until completion/reset. */
+        portENTER_CRITICAL(&s_report_mux);
+        s_waiting_report = false;
+        portEXIT_CRITICAL(&s_report_mux);
+    }
+    return err;
 }
 
 static esp_err_t release_all(void)
 {
     uint8_t none[6] = {0};
-    return send_report(0, none);
+    esp_err_t err = send_report(0, none);
+    if (err == ESP_OK) {
+        s_need_release = false;
+        portENTER_CRITICAL(&s_report_mux);
+        s_neutral_completed = false;
+        portEXIT_CRITICAL(&s_report_mux);
+    }
+    return err;
+}
+
+static void restart_usb(void)
+{
+    /* A host that stopped polling can retain the last key indefinitely. After
+     * bounded neutral cleanup fails, detach the keyboard to clear host state.
+     * Only a genuine new mount callback can permit more reports afterwards. */
+    portENTER_CRITICAL(&s_report_mux);
+    s_reenumerating = true;
+    portEXIT_CRITICAL(&s_report_mux);
+    ESP_LOGW(TAG, "neutral release failed; reconnecting USB keyboard");
+    if (!tud_disconnect()) {
+        ESP_LOGE(TAG, "USB detach failed; HID blocked until next mount");
+        return;
+    }
+    vTaskDelay(delay_ticks(50));
+    portENTER_CRITICAL(&s_report_mux);
+    s_reenumerating = true;
+    portEXIT_CRITICAL(&s_report_mux);
+    if (!tud_connect()) {
+        ESP_LOGE(TAG, "USB reconnect failed; HID blocked until next mount");
+    }
+}
+
+/* Cleanup continues after a command error, even with no further commands.
+ * Never replay a key-down or wake a sleeping host from this worker. */
+static void recovery_once(void)
+{
+    static bool was_active;
+    static uint32_t observed_epoch;
+    if (!s_installed || xSemaphoreTake(s_lock, 0) != pdTRUE) {
+        return;
+    }
+    bool active = bus_state() == ESP_OK;
+    portENTER_CRITICAL(&s_report_mux);
+    uint32_t epoch = s_bus_epoch;
+    portEXIT_CRITICAL(&s_report_mux);
+    if (!active || !was_active || epoch != observed_epoch) {
+        s_need_release = true;
+    }
+    if (active && s_need_release) {
+        if (release_all() != ESP_OK && bus_state() == ESP_OK) {
+            restart_usb();
+        }
+    }
+    observed_epoch = epoch;
+    was_active = active;
+    xSemaphoreGive(s_lock);
+}
+
+static void recovery_task(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        recovery_once();
+        vTaskDelay(delay_ticks(20));
+    }
+}
+
+static esp_err_t begin_action(void)
+{
+    esp_err_t err = ensure_awake();
+    portENTER_CRITICAL(&s_report_mux);
+    s_action_epoch = s_bus_epoch;
+    s_action_epoch_valid = true;
+    portEXIT_CRITICAL(&s_report_mux);
+    /* A neutral baseline also covers reconnects too brief for the worker to
+     * observe. No new key-down is allowed before this completion. */
+    return err == ESP_OK ? release_all() : err;
+}
+
+static esp_err_t lock_action(void)
+{
+    /* Budget includes lock contention and resume; reserve bounded cleanup
+     * after aborting. A slowly progressing endpoint must not block relay
+     * servicing indefinitely or continue typing after its command timed out. */
+    const int64_t deadline = esp_timer_get_time() + 8000000;
+    if (xSemaphoreTake(s_lock, delay_ticks(2000)) != pdTRUE) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    s_action_deadline = deadline;
+    return ESP_OK;
+}
+
+static esp_err_t finish_action(esp_err_t err)
+{
+    s_action_deadline = 0; /* cleanup has its own 200 ms report budget */
+    s_action_epoch_valid = false;
+    if (s_need_release && bus_state() == ESP_OK) {
+        esp_err_t release_err = release_all();
+        if (err == ESP_OK) {
+            err = release_err;
+        }
+        if (release_err != ESP_OK && bus_state() == ESP_OK) {
+            restart_usb();
+        }
+    }
+    xSemaphoreGive(s_lock);
+    return err;
+}
+
+static esp_err_t press_release(uint8_t modifier, uint8_t keycode[6])
+{
+    esp_err_t err = send_report(modifier, keycode);
+    return err == ESP_OK ? release_all() : err;
 }
 
 /* -------------------------------------------------------------- actions -- */
@@ -219,26 +525,21 @@ esp_err_t rw_hid_wake(void)
     if (!s_installed) {
         return ESP_ERR_NOT_SUPPORTED;
     }
-    if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(2000)) != pdTRUE) {
+    if (lock_action() != ESP_OK) {
         return ESP_ERR_INVALID_STATE;
     }
-    esp_err_t err = ensure_awake();
+    esp_err_t err = begin_action();
     if (err == ESP_OK) {
         uint8_t none[6] = {0};
         for (int i = 0; i < 2 && err == ESP_OK; i++) {
             if (i) {
-                vTaskDelay(pdMS_TO_TICKS(50));
+                vTaskDelay(delay_ticks(50));
             }
             /* Left-Ctrl alone has no side effect on any mainstream OS. */
-            err = send_report(KEYBOARD_MODIFIER_LEFTCTRL, none);
-            if (err == ESP_OK) {
-                vTaskDelay(pdMS_TO_TICKS(15));
-                err = release_all();
-            }
+            err = press_release(KEYBOARD_MODIFIER_LEFTCTRL, none);
         }
     }
-    xSemaphoreGive(s_lock);
-    return err;
+    return finish_action(err);
 }
 
 /* US-layout ASCII -> {shift, keycode}, straight from TinyUSB. */
@@ -266,10 +567,10 @@ esp_err_t rw_hid_type(const char *text, bool enter)
         }
     }
 
-    if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(2000)) != pdTRUE) {
+    if (lock_action() != ESP_OK) {
         return ESP_ERR_INVALID_STATE;
     }
-    esp_err_t err = ensure_awake();
+    esp_err_t err = begin_action();
 
     for (size_t i = 0; i < n && err == ESP_OK; i++) {
         unsigned char c = (unsigned char)text[i];
@@ -277,25 +578,15 @@ esp_err_t rw_hid_type(const char *text, bool enter)
         uint8_t mod = s_ascii2kc[c][0] ? KEYBOARD_MODIFIER_LEFTSHIFT : 0;
         kc[0] = s_ascii2kc[c][1];
 
-        err = send_report(mod, kc);
-        if (err == ESP_OK) {
-            vTaskDelay(pdMS_TO_TICKS(8));
-            err = release_all();
-            vTaskDelay(pdMS_TO_TICKS(8));
-        }
+        err = press_release(mod, kc);
     }
 
     if (err == ESP_OK && enter) {
         uint8_t kc[6] = {HID_KEY_ENTER, 0, 0, 0, 0, 0};
-        err = send_report(0, kc);
-        if (err == ESP_OK) {
-            vTaskDelay(pdMS_TO_TICKS(8));
-            err = release_all();
-        }
+        err = press_release(0, kc);
     }
 
-    xSemaphoreGive(s_lock);
-    return err;
+    return finish_action(err);
 }
 
 /* ------------------------------------------------------------ key names -- */
@@ -365,9 +656,15 @@ static bool lookup_keyname(const char *name, uint8_t *kc, uint8_t *mod)
         return false;
     }
     /* F1..F12 */
-    if ((name[0] == 'F' || name[0] == 'f') && name[1] >= '0' && name[1] <= '9') {
-        int n = atoi(name + 1);
-        if (n >= 1 && n <= 12) {
+    if (name[0] == 'F' || name[0] == 'f') {
+        int n = 0;
+        if (name[1] >= '1' && name[1] <= '9' && name[2] == '\0') {
+            n = name[1] - '0';
+        } else if (name[1] == '1' && name[2] >= '0' && name[2] <= '2' &&
+                   name[3] == '\0') {
+            n = 10 + name[2] - '0';
+        }
+        if (n) {
             *kc  = (uint8_t)(HID_KEY_F1 + (n - 1));
             *mod = 0;
             return true;
@@ -423,10 +720,10 @@ esp_err_t rw_hid_keys(const cJSON *seq)
         }
     }
 
-    if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(2000)) != pdTRUE) {
+    if (lock_action() != ESP_OK) {
         return ESP_ERR_INVALID_STATE;
     }
-    esp_err_t err = ensure_awake();
+    esp_err_t err = begin_action();
 
     bool first = true;
     cJSON_ArrayForEach(chord, seq) {
@@ -434,7 +731,7 @@ esp_err_t rw_hid_keys(const cJSON *seq)
             break;
         }
         if (!first) {
-            vTaskDelay(pdMS_TO_TICKS(30));
+            vTaskDelay(delay_ticks(30));
         }
         first = false;
 
@@ -450,15 +747,10 @@ esp_err_t rw_hid_keys(const cJSON *seq)
                 kcs[ni++] = kc;
             }
         }
-        err = send_report(mods, kcs);
-        if (err == ESP_OK) {
-            vTaskDelay(pdMS_TO_TICKS(15));
-            err = release_all();
-        }
+        err = press_release(mods, kcs);
     }
 
-    xSemaphoreGive(s_lock);
-    return err;
+    return finish_action(err);
 }
 
 #endif /* CONFIG_RW_PROFILE_POWER_ONLY */

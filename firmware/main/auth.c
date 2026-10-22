@@ -1,5 +1,6 @@
 #include "auth.h"
 
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -123,8 +124,10 @@ static bool num_field_i64(const cJSON *root, const char *name, int64_t *out)
         return false;
     }
     double d = it->valuedouble;
-    if (d != (double)(int64_t)d || d > 9007199254740992.0 ||
-        d < -9007199254740992.0) {
+    /* Check the range before casting: untrusted JSON can contain exponents
+     * outside int64_t, for which a floating-to-integer cast is undefined. */
+    if (!isfinite(d) || d > 9007199254740991.0 ||
+        d < -9007199254740991.0 || d != trunc(d)) {
         return false;
     }
     *out = (int64_t)d;
@@ -250,8 +253,12 @@ rw_auth_err_t rw_auth_verify(const rw_auth_ops_t *ops, const char *json,
     }
 
     /* ---- 5. ctr > lastCtr[kid]; persist BEFORE executing ---- */
-    if (ops->get_ctr) {
-        (void)ops->get_ctr(ops->ctx, out->kid, &last);
+    if (!ops->get_ctr || !ops->get_ctr(ops->ctx, out->kid, &last)) {
+        /* A failed storage read is not a fresh key. Never overwrite an
+         * unknown high-water mark with a potentially replayed counter. */
+        ESP_LOGE(TAG, "counter read failed for kid=%s", out->kid);
+        rc = RW_ERR_INTERNAL;
+        goto done;
     }
     if (out->ctr <= last) {
         ESP_LOGW(TAG, "replay: kid=%s ctr=%llu <= hwm=%llu", out->kid,

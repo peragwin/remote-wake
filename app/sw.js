@@ -13,7 +13,7 @@
  * Bump CACHE_VERSION when shipping changed assets.
  */
 
-const CACHE_VERSION = 'v1';
+const CACHE_VERSION = 'v2';
 const CACHE_NAME = `remote-wake-${CACHE_VERSION}`;
 
 const PRECACHE = [

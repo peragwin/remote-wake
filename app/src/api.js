@@ -3,8 +3,8 @@
  *
  *   POST {relayUrl}/v1/send/{deviceId}      Authorization: Bearer <deviceToken>
  *        body = command envelope (≤ 4 KiB), reply = the device's response
- *        envelope, or 504 {"err":"device_offline"} after the relay's 10 s
- *        long-poll.
+ *        envelope, or 504 {"err":"device_timeout"} after the relay's 20 s
+ *        long-poll (device_offline means there is no device connection).
  *   GET  {relayUrl}/v1/presence/{deviceId}  → { online, since }
  *
  * The bearer token gates relay access only and carries no command authority —
@@ -15,7 +15,7 @@ import { serializeEnvelope } from './signing.js';
 
 /** Relay-enforced body cap. We check locally so we can give a better message. */
 export const MAX_BODY_BYTES = 4096;
-const SEND_TIMEOUT_MS = 15_000; // relay long-polls up to 10 s
+const SEND_TIMEOUT_MS = 25_000; // relay long-polls up to 20 s
 const PRESENCE_TIMEOUT_MS = 8_000;
 
 export class RelayError extends Error {
@@ -78,7 +78,12 @@ export async function sendCommand(device, envelope) {
     /* non-JSON body */
   }
 
-  if (res.status === 504 || payload?.err === 'device_offline') {
+  if (payload?.err === 'device_timeout') {
+    throw new RelayError('device_timeout',
+      'Device did not confirm completion. The action may have run; check before retrying.',
+      { status: res.status });
+  }
+  if (payload?.err === 'device_offline') {
     throw new RelayError('device_offline', 'Device is offline', { status: res.status });
   }
   if (res.status === 401 || res.status === 403) {
@@ -209,9 +214,11 @@ export function errorMessage(err, res) {
     case 'busy':
       return 'Device is busy with another command. Try again in a moment.';
     case 'usb_down':
-      return 'USB is not connected to the PC — keystrokes cannot be delivered.';
+      return 'USB did not confirm completion. Input may be partial; check the PC before retrying.';
     case 'device_offline':
       return 'Device is offline — it is not connected to the relay.';
+    case 'device_timeout':
+      return 'Device did not confirm completion. The action may have run; check before retrying.';
     case 'unauthorized':
       return 'Relay rejected the device token — re-pair the device.';
     case 'rate_limited':

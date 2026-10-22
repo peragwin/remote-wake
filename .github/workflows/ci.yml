@@ -7,14 +7,38 @@ on:
 jobs:
   firmware:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [esp32s3, esp32c3]
     steps:
       - uses: actions/checkout@v4
-      - name: Build (esp32s3)
+      - name: Build (${{ matrix.target }})
         uses: espressif/esp-idf-ci-action@v1
         with:
           esp_idf_version: v5.3
-          target: esp32s3
+          target: ${{ matrix.target }}
           path: firmware
+
+  firmware-host:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install host test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsodium-dev
+          mkdir -p /tmp/remote-wake-test-deps
+          curl -fsSL https://raw.githubusercontent.com/DaveGamble/cJSON/v1.7.19/cJSON.c -o /tmp/remote-wake-test-deps/cJSON.c
+          curl -fsSL https://raw.githubusercontent.com/DaveGamble/cJSON/v1.7.19/cJSON.h -o /tmp/remote-wake-test-deps/cJSON.h
+          cd /tmp/remote-wake-test-deps
+          sha256sum --check <<'CHECKSUMS'
+          298581a04a36c0165da4b0aade235c23088cb2faa58651d720ea2f3706ed0b0d  cJSON.c
+          25b0145150d500498e4d209cec69c18c42cf818bffcc54690be3b895a2a16dee  cJSON.h
+          CHECKSUMS
+      - name: Firmware recovery regressions
+        env:
+          CJSON_DIR: /tmp/remote-wake-test-deps
+        run: bash firmware/test_host/run.sh
 
   relay:
     runs-on: ubuntu-latest

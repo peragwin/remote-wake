@@ -16,7 +16,8 @@ export const MAX_SEND_BYTES = 4096;
 /** Maximum accepted device → relay frame. Larger frames are dropped. */
 export const MAX_DEVICE_FRAME_BYTES = 16 * 1024;
 /** How long `POST /v1/send` long-polls for the device's response. */
-export const RESPONSE_TIMEOUT_MS = 10_000;
+// A valid power_hold takes up to 12 seconds before the firmware can reply.
+export const RESPONSE_TIMEOUT_MS = 20_000;
 /** Concurrent in-flight commands per device. */
 export const PENDING_CAP = 8;
 /** Server-initiated keepalive interval. */

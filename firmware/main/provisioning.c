@@ -13,6 +13,7 @@
 #include "esp_mac.h"
 #include "esp_netif.h"
 #include "esp_system.h"
+#include "esp_timer.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -23,6 +24,7 @@
 static const char *TAG = "rw.prov";
 
 #define MAX_BODY 2048
+#define BODY_TIMEOUT_US (10LL * 1000000)
 #define AP_CHANNEL 6
 #define AP_MAX_CONN 2
 
@@ -52,10 +54,18 @@ static char *read_body(httpd_req_t *req)
         return NULL;
     }
     int got = 0;
+    const int64_t deadline = esp_timer_get_time() + BODY_TIMEOUT_US;
     while (got < total) {
+        if (esp_timer_get_time() >= deadline) {
+            free(buf);
+            return NULL;
+        }
         int r = httpd_req_recv(req, buf + got, total - got);
         if (r == HTTPD_SOCK_ERR_TIMEOUT) {
-            continue;
+            /* The server has one handler task. An abandoned request must
+             * not monopolize it and make setup unusable until a reset. */
+            free(buf);
+            return NULL;
         }
         if (r <= 0) {
             free(buf);

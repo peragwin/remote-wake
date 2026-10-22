@@ -118,7 +118,10 @@ are not signed in v1; signing them is a v2 candidate).
 - `POST https://<relay>/v1/send/<deviceId>` with
   `Authorization: Bearer <deviceToken>`, body = command envelope.
   Relay forwards to the device if connected and returns the device's response
-  (long-poll up to 10 s), else `504 {"err":"device_offline"}`.
+  (long-poll up to 20 s, allowing a 12 s power hold), else
+  `504 {"err":"device_timeout"}`. No connected device returns
+  `504 {"err":"device_offline"}` immediately. A timeout does not prove the
+  action failed; clients must not automatically repeat it.
 - `GET /v1/presence/<deviceId>` (same auth) → `{"online": true, "since": ts}`
   (`since` = unix seconds of the last online/offline transition, `null` if the
   device has never connected).

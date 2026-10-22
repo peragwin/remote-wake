@@ -1,5 +1,6 @@
 #include "relay_client.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -12,6 +13,7 @@
 #include "esp_netif_sntp.h"
 #include "esp_random.h"
 #include "esp_task_wdt.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 #include "esp_websocket_client.h"
 #include "esp_wifi.h"
@@ -25,6 +27,13 @@
 
 static const char *TAG = "rw.relay";
 
+/* Transport teardown has no bounded stop API in esp_websocket_client.
+ * A logging-only watchdog cannot recover it. Keep this invariant explicit for
+ * existing sdkconfigs as well as fresh builds using sdkconfig.defaults. */
+#if !CONFIG_ESP_TASK_WDT_INIT || !CONFIG_ESP_TASK_WDT_PANIC
+#error "Relay recovery requires initialized, panic-enabled task watchdog"
+#endif
+
 #define RX_QUEUE_DEPTH   4
 #define BACKOFF_MIN_MS   1000
 #define BACKOFF_MAX_MS   60000
@@ -36,24 +45,86 @@ static const char *TAG = "rw.relay";
                                   * over this deviceId */
 #define CLOCK_SANE_EPOCH 1700000000LL /* 2023-11 — anything below is unsynced */
 
+/* ESP32 is 32-bit: volatile does not make timestamps atomic or protect
+ * multi-field link transitions between the Wi-Fi, WebSocket and relay tasks. */
 typedef struct {
-    char  *data;
+    bool net_up;
+    bool connected;
+    bool ready;
+    bool failed;
+    uint32_t network_generation;
+    uint32_t session_network_generation;
+    uint32_t session;
+    int64_t last_rx_us;
+    int close_code;
+} rw_link_state_t;
+
+typedef struct {
+    char *data;
     size_t len;
+    uint32_t session;
 } rw_rx_msg_t;
 
-static esp_websocket_client_handle_t s_client;
+static esp_websocket_client_handle_t s_client; /* relay task owns this handle */
 static QueueHandle_t s_rx_queue;
-static volatile bool s_net_up;
-static volatile bool s_connected;
-static volatile bool s_disconnected_evt;
-static volatile bool s_sntp_started;
-static volatile int64_t s_last_rx_us;    /* any inbound frame, for liveness */
-static volatile int  s_close_code;       /* last websocket close status code */
+static portMUX_TYPE s_state_mux = portMUX_INITIALIZER_UNLOCKED;
+static rw_link_state_t s_link;
+static uint32_t s_next_session; /* relay task only; zero means no session */
+static bool s_sntp_started;     /* relay task only */
 
-/* Reassembly buffer for fragmented text messages. */
-static char   *s_asm;
-static size_t  s_asm_len;
-static size_t  s_asm_cap;
+static rw_link_state_t link_snapshot(void)
+{
+    portENTER_CRITICAL(&s_state_mux);
+    rw_link_state_t state = s_link;
+    portEXIT_CRITICAL(&s_state_mux);
+    return state;
+}
+
+static bool session_valid(uint32_t session)
+{
+    rw_link_state_t state = link_snapshot();
+    return session != 0 && state.session == session && state.net_up &&
+           state.session_network_generation == state.network_generation &&
+           state.connected && !state.failed;
+}
+
+static void link_failed(void)
+{
+    portENTER_CRITICAL(&s_state_mux);
+    s_link.connected = false;
+    s_link.ready = false;
+    s_link.failed = true;
+    portEXIT_CRITICAL(&s_state_mux);
+}
+
+static uint32_t begin_session(void)
+{
+    if (++s_next_session == 0) {
+        ++s_next_session;
+    }
+    portENTER_CRITICAL(&s_state_mux);
+    s_link.session = s_next_session;
+    s_link.session_network_generation = s_link.network_generation;
+    s_link.connected = false;
+    s_link.ready = false;
+    s_link.failed = !s_link.net_up;
+    s_link.close_code = 0;
+    s_link.last_rx_us = 0;
+    portEXIT_CRITICAL(&s_state_mux);
+    return s_next_session;
+}
+
+/* Only the WebSocket event task touches assembly while the client runs.
+ * The relay task resets it only after stop/destroy have joined that task. */
+static char *s_asm;
+static size_t s_asm_len;
+static size_t s_asm_cap;
+static bool s_asm_active;
+static bool s_asm_dropping;
+static size_t s_frame_offset;
+static size_t s_frame_len;
+static uint8_t s_frame_opcode;
+static bool s_frame_fin;
 
 /* Auth-failure rate limiting. */
 static int64_t s_fail_ts[CONFIG_RW_AUTH_FAIL_THRESHOLD];
@@ -93,7 +164,10 @@ static void sntp_start_once(void)
 
 int rw_relay_lockout_remaining(void)
 {
-    int64_t left = s_lock_until_us - esp_timer_get_time();
+    portENTER_CRITICAL(&s_state_mux);
+    int64_t until = s_lock_until_us;
+    portEXIT_CRITICAL(&s_state_mux);
+    int64_t left = until - esp_timer_get_time();
     return left > 0 ? (int)((left + 999999) / 1000000) : 0;
 }
 
@@ -112,7 +186,9 @@ static void note_auth_failure(void)
      * if it happened within the last minute we have hit the threshold. */
     int64_t oldest = s_fail_ts[s_fail_head];
     if (oldest != 0 && (now - oldest) <= 60LL * 1000000LL) {
+        portENTER_CRITICAL(&s_state_mux);
         s_lock_until_us = now + (int64_t)CONFIG_RW_AUTH_LOCKOUT_SEC * 1000000LL;
+        portEXIT_CRITICAL(&s_state_mux);
         memset(s_fail_ts, 0, sizeof(s_fail_ts));
         s_fail_head = 0;
         ESP_LOGE(TAG, "auth-failure lockout for %d s", CONFIG_RW_AUTH_LOCKOUT_SEC);
@@ -154,25 +230,36 @@ static bool ops_act_enabled(void *ctx, const char *act)
 
 /* ------------------------------------------------------------ responses -- */
 
-static void ws_send_json(cJSON *obj)
+static bool ws_send_text(const char *text, size_t len, TickType_t timeout)
+{
+    rw_link_state_t state = link_snapshot();
+    if (!s_client || !session_valid(state.session) ||
+        !esp_websocket_client_is_connected(s_client)) {
+        return false;
+    }
+    int sent = esp_websocket_client_send_text(s_client, text, (int)len, timeout);
+    if (sent != (int)len) {
+        ESP_LOGW(TAG, "incomplete send (%d/%u) — marking link disconnected",
+                 sent, (unsigned)len);
+        link_failed();
+        return false;
+    }
+    return session_valid(state.session);
+}
+
+static bool ws_send_json(cJSON *obj)
 {
     if (!obj) {
-        return;
+        return false;
     }
     char *txt = cJSON_PrintUnformatted(obj);
     cJSON_Delete(obj);
     if (!txt) {
-        return;
+        return false;
     }
-    if (s_client && esp_websocket_client_is_connected(s_client)) {
-        int n = esp_websocket_client_send_text(s_client, txt, (int)strlen(txt),
-                                               pdMS_TO_TICKS(5000));
-        if (n < 0) {
-            ESP_LOGW(TAG, "send failed — marking link disconnected");
-            s_disconnected_evt = true;
-        }
-    }
+    bool sent = ws_send_text(txt, strlen(txt), pdMS_TO_TICKS(5000));
     cJSON_free(txt);
+    return sent;
 }
 
 static void respond_err(const char *id, const char *err)
@@ -375,7 +462,7 @@ static bool looks_like_command(const char *json, size_t len)
     return ok;
 }
 
-static void handle_envelope(const char *json, size_t len)
+static void handle_envelope(const char *json, size_t len, uint32_t session)
 {
     char peek_id[RW_ID_MAXLEN] = {0};
     rw_auth_peek_id(json, len, peek_id, sizeof(peek_id));
@@ -416,7 +503,10 @@ static void handle_envelope(const char *json, size_t len)
 
     ESP_LOGI(TAG, "<- %s (kid=%s ctr=%llu)", cmd.act, cmd.kid,
              (unsigned long long)cmd.ctr);
-    dispatch(&cmd);
+    /* A network loss during verification must not execute an old command. */
+    if (session_valid(session)) {
+        dispatch(&cmd);
+    }
     rw_cmd_free(&cmd);
 }
 
@@ -425,11 +515,15 @@ static void handle_envelope(const char *json, size_t len)
 static void asm_reset(void)
 {
     s_asm_len = 0;
+    s_asm_active = false;
+    s_asm_dropping = false;
+    s_frame_offset = 0;
+    s_frame_len = 0;
 }
 
 static bool asm_append(const char *data, size_t n)
 {
-    if (s_asm_len + n > RW_MAX_ENVELOPE_BYTES) {
+    if (n > RW_MAX_ENVELOPE_BYTES - s_asm_len) {
         ESP_LOGW(TAG, "envelope over %d bytes — dropping", RW_MAX_ENVELOPE_BYTES);
         return false;
     }
@@ -445,15 +539,17 @@ static bool asm_append(const char *data, size_t n)
         s_asm = nb;
         s_asm_cap = cap;
     }
-    memcpy(s_asm + s_asm_len, data, n);
+    if (n > 0) {
+        memcpy(s_asm + s_asm_len, data, n);
+    }
     s_asm_len += n;
     s_asm[s_asm_len] = '\0';
     return true;
 }
 
-static void queue_message(const char *data, size_t len)
+static void queue_message(const char *data, size_t len, uint32_t session)
 {
-    rw_rx_msg_t msg = {.data = malloc(len + 1), .len = len};
+    rw_rx_msg_t msg = {.data = malloc(len + 1), .len = len, .session = session};
     if (!msg.data) {
         return;
     }
@@ -465,76 +561,124 @@ static void queue_message(const char *data, size_t len)
     }
 }
 
+/* payload_offset/len describe one frame, while FIN terminates the whole
+ * message. A continuation frame has offset zero again; a large frame also
+ * arrives in multiple callbacks. Keep both boundaries independently. */
+static void assemble_text(const esp_websocket_event_data_t *d, uint32_t session)
+{
+    if (d->data_len < 0 || d->payload_len < 0 || d->payload_offset < 0 ||
+        d->payload_offset > d->payload_len ||
+        d->data_len > d->payload_len - d->payload_offset ||
+        (d->data_len > 0 && !d->data_ptr)) {
+        s_asm_dropping = true;
+        return;
+    }
+    if (d->payload_offset == 0) {
+        if (d->op_code == 0x01) {
+            asm_reset();
+            s_asm_active = true;
+        } else if (!s_asm_active || s_frame_offset != s_frame_len) {
+            s_asm_dropping = true;
+        }
+        s_frame_offset = 0;
+        s_frame_len = (size_t)d->payload_len;
+        s_frame_opcode = d->op_code;
+        s_frame_fin = d->fin;
+    }
+    if (!s_asm_active || s_asm_dropping) {
+        return;
+    }
+    if ((size_t)d->payload_offset != s_frame_offset ||
+        (size_t)d->payload_len != s_frame_len ||
+        d->op_code != s_frame_opcode || d->fin != s_frame_fin ||
+        !asm_append(d->data_ptr, (size_t)d->data_len)) {
+        /* Never reinterpret a suffix after malformed input, overflow or OOM. */
+        s_asm_dropping = true;
+        return;
+    }
+    s_frame_offset += (size_t)d->data_len;
+    if (s_frame_offset == s_frame_len && d->fin) {
+        if (s_asm_len > 0) {
+            queue_message(s_asm, s_asm_len, session);
+        }
+        asm_reset();
+    }
+}
+
 static void ws_event_handler(void *args, esp_event_base_t base, int32_t id,
                              void *event_data)
 {
-    (void)args;
     (void)base;
-    esp_websocket_event_data_t *d = (esp_websocket_event_data_t *)event_data;
+    uint32_t session = (uint32_t)(uintptr_t)args;
+    esp_websocket_event_data_t *d = event_data;
+
+    portENTER_CRITICAL(&s_state_mux);
+    bool current = session != 0 && s_link.session == session && s_link.net_up &&
+        s_link.session_network_generation == s_link.network_generation &&
+        !s_link.failed;
+    if (current) {
+        switch (id) {
+        case WEBSOCKET_EVENT_CONNECTED:
+            s_link.close_code = 0;
+            s_link.last_rx_us = esp_timer_get_time();
+            s_link.connected = true;
+            break;
+        case WEBSOCKET_EVENT_DISCONNECTED:
+        case WEBSOCKET_EVENT_ERROR:
+        case WEBSOCKET_EVENT_CLOSED:
+            s_link.connected = false;
+            s_link.ready = false;
+            s_link.failed = true;
+            break;
+        case WEBSOCKET_EVENT_DATA:
+            if (d && s_link.connected) {
+                s_link.last_rx_us = esp_timer_get_time();
+                if (d->op_code == 0x08) {
+                    if (d->payload_offset == 0 && d->data_len >= 2 && d->data_ptr) {
+                        s_link.close_code = ((unsigned char)d->data_ptr[0] << 8) |
+                                            (unsigned char)d->data_ptr[1];
+                    }
+                    s_link.connected = false;
+                    s_link.ready = false;
+                    s_link.failed = true;
+                }
+            }
+            break;
+        default:
+            break;
+        }
+    }
+    portEXIT_CRITICAL(&s_state_mux);
+    if (!current) {
+        return; /* stale callback after a network loss, even if IP returned */
+    }
 
     switch (id) {
     case WEBSOCKET_EVENT_CONNECTED:
         ESP_LOGI(TAG, "websocket connected");
         asm_reset();
-        s_close_code = 0;
-        s_last_rx_us = esp_timer_get_time();
-        s_connected = true;
         break;
-
     case WEBSOCKET_EVENT_DISCONNECTED:
-        ESP_LOGW(TAG, "websocket disconnected");
-        s_connected = false;
-        s_disconnected_evt = true;
-        break;
-
     case WEBSOCKET_EVENT_ERROR:
-        ESP_LOGW(TAG, "websocket error");
-        s_connected = false;
-        s_disconnected_evt = true;
-        break;
-
     case WEBSOCKET_EVENT_CLOSED:
-        ESP_LOGW(TAG, "websocket closed by peer");
-        s_connected = false;
-        s_disconnected_evt = true;
+        ESP_LOGW(TAG, "websocket ended (event %ld)", (long)id);
         break;
-
     case WEBSOCKET_EVENT_DATA:
         if (!d) {
             break;
         }
-        s_last_rx_us = esp_timer_get_time();
-        /* 0x08 close, 0x09 ping, 0x0A pong are handled by the client itself. */
         if (d->op_code == 0x08) {
-            /* Close payload starts with a big-endian status code. */
-            if (d->data_len >= 2 && d->data_ptr) {
-                s_close_code = ((unsigned char)d->data_ptr[0] << 8) |
-                               (unsigned char)d->data_ptr[1];
-                ESP_LOGW(TAG, "close frame, code %d", s_close_code);
+            ESP_LOGW(TAG, "close frame, code %d", link_snapshot().close_code);
+        } else if (session_valid(session)) {
+            if (d->op_code == 0x01 || d->op_code == 0x00) {
+                assemble_text(d, session);
+            } else if (d->op_code == 0x02) {
+                /* Binary messages and their continuations are not commands. */
+                asm_reset();
             }
-            s_connected = false;
-            s_disconnected_evt = true;
-            break;
-        }
-        if (d->op_code != 0x01 && d->op_code != 0x00) {
-            break;  /* binary / control: the protocol is text-only */
-        }
-        if (d->payload_offset == 0) {
-            asm_reset();
-        }
-        if (d->data_len > 0 && !asm_append(d->data_ptr, (size_t)d->data_len)) {
-            asm_reset();
-            break;
-        }
-        if (d->payload_len > 0 &&
-            (size_t)(d->payload_offset + d->data_len) >= (size_t)d->payload_len) {
-            if (s_asm_len > 0) {
-                queue_message(s_asm, s_asm_len);
-            }
-            asm_reset();
+            /* Control ping/pong may be interleaved with a fragmented message. */
         }
         break;
-
     default:
         break;
     }
@@ -542,19 +686,22 @@ static void ws_event_handler(void *args, esp_event_base_t base, int32_t id,
 
 /* ---------------------------------------------------------------- task -- */
 
-static void send_hello(void)
+static bool send_hello(void)
 {
     cJSON *o = cJSON_CreateObject();
     cJSON *h = cJSON_CreateObject();
     if (!o || !h) {
         cJSON_Delete(o);
         cJSON_Delete(h);
-        return;
+        return false;
     }
     cJSON_AddStringToObject(h, "fw", RW_FW_VERSION);
     cJSON_AddItemToObject(o, "hello", h);
-    ws_send_json(o);
-    ESP_LOGI(TAG, "-> hello fw=%s", RW_FW_VERSION);
+    bool sent = ws_send_json(o);
+    if (sent) {
+        ESP_LOGI(TAG, "-> hello fw=%s", RW_FW_VERSION);
+    }
+    return sent;
 }
 
 static uint32_t jitter(uint32_t ms)
@@ -577,15 +724,23 @@ static void drain_queue(void)
 
 static void teardown_client(void)
 {
+    /* Fence callbacks before touching the client. stop() joins the event task
+     * before we drain its queue and reset its assembly buffer. */
+    portENTER_CRITICAL(&s_state_mux);
+    s_link.session = 0;
+    s_link.connected = false;
+    s_link.ready = false;
+    s_link.failed = true;
+    portEXIT_CRITICAL(&s_state_mux);
     if (s_client) {
-        if (esp_websocket_client_is_connected(s_client)) {
-            esp_websocket_client_close(s_client, pdMS_TO_TICKS(1000));
-        }
+        /* Recovery should abort TCP, not attempt a close handshake on a dead
+         * link. Even esp_websocket_client close(timeout) can block
+         * forever acquiring its lock; stop/destroy can also wait indefinitely.
+         * The subscribed relay task + panic-enabled TWDT bounds those waits. */
         esp_websocket_client_stop(s_client);
         esp_websocket_client_destroy(s_client);
         s_client = NULL;
     }
-    s_connected = false;
     drain_queue();
     asm_reset();
 }
@@ -599,8 +754,13 @@ static void relay_task(void *arg)
     uint32_t backoff = BACKOFF_MIN_MS;
 
     esp_err_t wdt = esp_task_wdt_add(NULL);
-    if (wdt != ESP_OK && wdt != ESP_ERR_INVALID_ARG) {
-        ESP_LOGW(TAG, "task wdt subscribe: %s", esp_err_to_name(wdt));
+    if (wdt != ESP_OK) {
+        /* Without this subscription a blocked transport stop could strand the
+         * device forever; fail closed instead of silently losing recovery. */
+        ESP_LOGE(TAG, "task wdt subscribe failed: %s — rebooting", esp_err_to_name(wdt));
+        esp_restart();
+        vTaskDelete(NULL);
+        return;
     }
 
     char url[RW_RELAY_URL_MAXLEN + 64];
@@ -610,7 +770,8 @@ static void relay_task(void *arg)
         int64_t next_probe_us = 0;
         esp_task_wdt_reset();
 
-        if (!s_net_up) {
+        if (!link_snapshot().net_up) {
+            s_relay_down_since_us = 0;
             if (s_client) {
                 teardown_client();
             }
@@ -658,8 +819,7 @@ static void relay_task(void *arg)
 
         ESP_LOGI(TAG, "connecting to %s", url);
         rw_led_set(RW_LED_CONNECTING);
-        s_connected = false;
-        s_disconnected_evt = false;
+        uint32_t session = begin_session();
         drain_queue();
 
         s_client = esp_websocket_client_init(&cfg);
@@ -670,39 +830,54 @@ static void relay_task(void *arg)
             }
             goto backoff_delay;
         }
-        esp_websocket_register_events(s_client, WEBSOCKET_EVENT_ANY,
-                                      ws_event_handler, NULL);
+        if (esp_websocket_register_events(s_client, WEBSOCKET_EVENT_ANY,
+                                         ws_event_handler, (void *)(uintptr_t)session) != ESP_OK) {
+            ESP_LOGE(TAG, "event registration failed");
+            goto teardown;
+        }
         if (esp_websocket_client_start(s_client) != ESP_OK) {
             ESP_LOGE(TAG, "client start failed");
             goto teardown;
         }
 
         /* Wait for the handshake. */
-        for (int i = 0; i < 60 && !s_connected && !s_disconnected_evt && s_net_up; i++) {
+        for (int i = 0; i < 60; i++) {
+            rw_link_state_t state = link_snapshot();
+            if (state.connected || state.failed || !state.net_up) {
+                break;
+            }
             esp_task_wdt_reset();
             vTaskDelay(pdMS_TO_TICKS(250));
         }
-        if (!s_connected) {
+        if (!session_valid(session)) {
             ESP_LOGW(TAG, "handshake timed out or aborted");
             goto teardown;
         }
 
-        send_hello();
+        if (!send_hello()) {
+            goto teardown;
+        }
+        portENTER_CRITICAL(&s_state_mux);
+        if (s_link.session == session && s_link.net_up && !s_link.failed) {
+            s_link.ready = true;
+        }
+        portEXIT_CRITICAL(&s_state_mux);
         backoff = BACKOFF_MIN_MS;   /* a good connection resets the ramp */
         s_relay_down_since_us = 0;  /* connection succeeded, clear down timer */
         rw_led_set(locked_out() ? RW_LED_LOCKOUT : RW_LED_CONNECTED);
-        s_last_rx_us = esp_timer_get_time();
-        next_probe_us = s_last_rx_us + (int64_t)WS_PING_SEC * 1000000LL;
+        next_probe_us = esp_timer_get_time() + (int64_t)WS_PING_SEC * 1000000LL;
 
-        while (s_net_up && s_connected && !s_disconnected_evt) {
+        while (session_valid(session)) {
             esp_task_wdt_reset();
             rw_rx_msg_t msg;
             if (xQueueReceive(s_rx_queue, &msg, pdMS_TO_TICKS(250)) == pdTRUE) {
-                if (looks_like_command(msg.data, msg.len)) {
-                    handle_envelope(msg.data, msg.len);
+                if (msg.session != session || !session_valid(msg.session)) {
+                    /* A message queued before IP loss cannot run on its return. */
+                } else if (looks_like_command(msg.data, msg.len)) {
+                    handle_envelope(msg.data, msg.len, msg.session);
                 } else {
                     /* Relay keepalive ({"v":1,"ping":...}) or our own "pong".
-                     * Not a command; s_last_rx_us already counted it. */
+                     * Not a command; the callback already counted it. */
                     ESP_LOGD(TAG, "non-command frame (%u B) ignored",
                              (unsigned)msg.len);
                 }
@@ -716,27 +891,23 @@ static void relay_task(void *arg)
              * object. */
             if (now_us >= next_probe_us) {
                 next_probe_us = now_us + (int64_t)WS_PING_SEC * 1000000LL;
-                if (s_client && esp_websocket_client_is_connected(s_client)) {
-                    int sent = esp_websocket_client_send_text(s_client, "ping", 4,
-                                                               pdMS_TO_TICKS(2000));
-                    if (sent < 0) {
-                        ESP_LOGW(TAG, "ping send failed — link broken");
-                        break;
-                    }
+                if (!ws_send_text("ping", 4, pdMS_TO_TICKS(2000))) {
+                    ESP_LOGW(TAG, "ping send failed — link broken");
+                    break;
                 }
             }
-            if (now_us - s_last_rx_us > (int64_t)RX_SILENCE_MS * 1000LL) {
+            if (now_us - link_snapshot().last_rx_us > (int64_t)RX_SILENCE_MS * 1000LL) {
                 ESP_LOGW(TAG, "no frames for %d ms — treating link as dead",
                          RX_SILENCE_MS);
                 break;
             }
 
-            if (!locked_out() && s_connected) {
+            if (!locked_out() && session_valid(session)) {
                 rw_led_set(RW_LED_CONNECTED);
             }
         }
 
-        if (s_close_code == WS_CLOSE_SUPERSEDED) {
+        if (link_snapshot().close_code == WS_CLOSE_SUPERSEDED) {
             /* Another websocket for this deviceId took over. Reconnecting
              * immediately would just fight it, so go straight to the cap. */
             ESP_LOGW(TAG, "superseded by another connection (4001)");
@@ -755,6 +926,9 @@ static void relay_task(void *arg)
         ESP_LOGI(TAG, "reconnecting in %u ms", (unsigned)wait_ms);
         for (uint32_t waited = 0; waited < wait_ms; waited += 250) {
             esp_task_wdt_reset();
+            if (!link_snapshot().net_up) {
+                break;
+            }
             vTaskDelay(pdMS_TO_TICKS(250));
         }
         backoff = backoff >= BACKOFF_MAX_MS / 2 ? BACKOFF_MAX_MS : backoff * 2;
@@ -783,14 +957,20 @@ esp_err_t rw_relay_start(void)
 
 bool rw_relay_connected(void)
 {
-    return s_connected;
+    return link_snapshot().ready;
 }
 
 void rw_relay_notify_network(bool up)
 {
-    s_net_up = up;
-    if (!up) {
-        s_connected = false;
-        s_disconnected_evt = true;
+    portENTER_CRITICAL(&s_state_mux);
+    if (s_link.net_up != up) {
+        ++s_link.network_generation;
     }
+    s_link.net_up = up;
+    if (!up) {
+        s_link.connected = false;
+        s_link.ready = false;
+        s_link.failed = true;
+    }
+    portEXIT_CRITICAL(&s_state_mux);
 }

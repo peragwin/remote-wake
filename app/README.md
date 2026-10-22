@@ -151,6 +151,7 @@ ramp and red reserved exclusively for power-off.
 
 | File | Covers |
 |---|---|
+| `test/api.test.mjs` | Relay timeout versus offline errors; messages for uncertain command completion and partial USB input |
 | `test/vectors.test.mjs` | Signing strings byte-for-byte vs `docs/test-vectors.json`; noble and `node:crypto` both reproduce every signature; canonical-JSON edge cases; tamper detection |
 | `test/qr.test.mjs` | Independently **decodes** the generated matrix — reads format bits, un-masks, de-interleaves, verifies Reed-Solomon parity algebraically, reads the payload back — across all 10 versions |
 | `test/pairing.test.mjs` | Pairing-blob validation, chord parsing, presets, limits vs the spec |
@@ -167,6 +168,47 @@ key generation, the pairing round-trip and the install prompt.
 ---
 
 ## Deploying
+
+The existing installation is **https://remote-wake.wryskware.dev/**, served
+from **Amazon S3 through CloudFront**. Keep that origin when updating: the
+phone's pairing key and settings are stored against it. The bucket, origin
+prefix (if any), and distribution ID are not recorded in this repository.
+
+GitHub's current [CI workflow](../.github/workflows/ci.yml) builds and tests
+on pushes and pull requests; it does **not deploy** the website or relay.
+Automatic publishing would need a separate deployment workflow and AWS
+authentication, preferably GitHub OIDC with access limited to this site.
+
+From a machine already signed into the hosting AWS account, find the existing
+distribution and its S3 origin:
+
+```sh
+aws cloudfront list-distributions \
+  --query 'DistributionList.Items[?Aliases.Items && contains(Aliases.Items, `remote-wake.wryskware.dev`)].{Id:Id,Origins:Origins.Items[*].{DomainName:DomainName,OriginPath:OriginPath}}' \
+  --output json
+```
+
+For the current transport update, upload these two changed assets from the
+repository root to that bucket and origin prefix, preserving the live site's
+content types and cache policy, then invalidate their public paths. Replace
+the placeholders with the existing hosting values:
+
+```sh
+aws s3 cp app/src/api.js s3://<existing-bucket-and-prefix>/src/api.js \
+  --content-type 'text/javascript; charset=utf-8' \
+  --cache-control 'no-cache, must-revalidate'
+aws s3 cp app/sw.js s3://<existing-bucket-and-prefix>/sw.js \
+  --content-type 'text/javascript; charset=utf-8' \
+  --cache-control 'no-cache, must-revalidate'
+aws cloudfront create-invalidation \
+  --distribution-id <existing-distribution-id> \
+  --paths '/src/api.js' '/sw.js'
+```
+
+Bump `CACHE_VERSION` in `sw.js` whenever shipping changed assets; this update
+uses `v2`. Reopen the installed app after deployment so it receives the new
+service worker and cached assets. Future releases must also upload any other
+changed runtime assets and invalidate their corresponding paths.
 
 Any static host. Must be **https or localhost** — WebCrypto, WebAuthn and
 service workers all require a secure context. Point `relayUrl` at your relay

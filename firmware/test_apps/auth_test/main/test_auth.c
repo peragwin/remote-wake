@@ -104,6 +104,7 @@ static const vector_t k_vectors[] = {
 
 static uint64_t g_ctr[4];
 static int      g_persist_calls;
+static bool     g_read_failure;
 
 static bool fake_get_key(void *ctx, const char *kid, uint8_t out[32])
 {
@@ -118,6 +119,9 @@ static bool fake_get_key(void *ctx, const char *kid, uint8_t out[32])
 static bool fake_get_ctr(void *ctx, const char *kid, uint64_t *out)
 {
     (void)ctx;
+    if (g_read_failure) {
+        return false;
+    }
     if (kid[0] != 'p' || kid[1] < '1' || kid[1] > '4') {
         return false;
     }
@@ -172,6 +176,7 @@ static void reset_state(void)
 {
     memset(g_ctr, 0, sizeof(g_ctr));
     g_persist_calls = 0;
+    g_read_failure = false;
     g_disable_acts = false;
 }
 
@@ -433,6 +438,51 @@ TEST_CASE("peek_id recovers the id from an unverifiable envelope", "[auth]")
 
     rw_auth_peek_id("garbage", 7, id, sizeof(id));
     TEST_ASSERT_EQUAL_STRING("", id);
+}
+
+TEST_CASE("counter read errors cannot reset the replay high-water mark", "[auth]")
+{
+    TEST_ASSERT_EQUAL(ESP_OK, rw_auth_init());
+    reset_state();
+    g_ctr[0] = 100;
+    g_read_failure = true;
+    rw_auth_ops_t ops = make_ops(k_vectors[0].ts);
+    rw_cmd_t cmd;
+    TEST_ASSERT_EQUAL(RW_ERR_INTERNAL,
+                      rw_auth_verify(&ops, k_vectors[0].envelope,
+                                     strlen(k_vectors[0].envelope), &cmd));
+    rw_cmd_free(&cmd);
+    ops.get_ctr = NULL;
+    TEST_ASSERT_EQUAL(RW_ERR_INTERNAL,
+                      rw_auth_verify(&ops, k_vectors[0].envelope,
+                                     strlen(k_vectors[0].envelope), &cmd));
+    rw_cmd_free(&cmd);
+    TEST_ASSERT_EQUAL_INT(0, g_persist_calls);
+    TEST_ASSERT_EQUAL_UINT64(100, g_ctr[0]);
+
+    ops.get_ctr = fake_get_ctr;
+    g_read_failure = false;
+    TEST_ASSERT_EQUAL(RW_ERR_REPLAY,
+                      rw_auth_verify(&ops, k_vectors[0].envelope,
+                                     strlen(k_vectors[0].envelope), &cmd));
+    rw_cmd_free(&cmd);
+}
+
+TEST_CASE("untrusted numeric fields are bounded before integer conversion", "[auth]")
+{
+    reset_state();
+    rw_auth_ops_t ops = make_ops(k_vectors[0].ts);
+    const char *numbers[] = {"1e300", "-1e300", "1e999", "1.5",
+                             "9007199254740992"};
+    for (size_t i = 0; i < sizeof(numbers) / sizeof(numbers[0]); ++i) {
+        char json[128];
+        snprintf(json, sizeof(json), "{\"v\":%s}", numbers[i]);
+        rw_cmd_t cmd;
+        TEST_ASSERT_EQUAL(RW_ERR_BAD_JSON,
+                          rw_auth_verify(&ops, json, strlen(json), &cmd));
+        rw_cmd_free(&cmd);
+    }
+    TEST_ASSERT_EQUAL_INT(0, g_persist_calls);
 }
 
 /* ------------------------------------------------------------- runner --- */

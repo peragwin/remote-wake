@@ -1,5 +1,7 @@
 set(RW_SRCS
     "main.c"
+    "wifi_recovery.c"
+    "wifi_station.c"
     "config.c"
     "auth.c"
     "canon_json.c"
@@ -28,7 +30,10 @@ set(RW_REQUIRES
     lwip
 )
 
-if(NOT CONFIG_RW_PROFILE_POWER_ONLY)
+# Requirements are expanded before sdkconfig is loaded, so profile CONFIG_*
+# values cannot select this dependency. Match the manifest's supported targets.
+if(IDF_TARGET STREQUAL "esp32s2" OR IDF_TARGET STREQUAL "esp32s3" OR
+   IDF_TARGET STREQUAL "esp32p4")
     list(APPEND RW_REQUIRES esp_tinyusb)
 endif()
 

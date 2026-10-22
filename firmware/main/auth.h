@@ -74,7 +74,8 @@ typedef struct {
     void *ctx;
     /** Fetch the 32-byte Ed25519 public key for @p kid. False = no such slot. */
     bool (*get_key)(void *ctx, const char *kid, uint8_t out[RW_ED25519_PUBKEY_LEN]);
-    /** Fetch the persisted counter high-water mark for @p kid (0 if none). */
+    /** Fetch the persisted counter high-water mark for @p kid (0 if none).
+     * False means a storage failure; verification must fail closed. */
     bool (*get_ctr)(void *ctx, const char *kid, uint64_t *out);
     /** Persist @p ctr as the new high-water mark. MUST be durable on return. */
     esp_err_t (*set_ctr)(void *ctx, const char *kid, uint64_t ctr);

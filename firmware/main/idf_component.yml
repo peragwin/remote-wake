@@ -10,9 +10,10 @@ dependencies:
   espressif/libsodium:
     version: "^1.0.20"
 
-  ## wss:// transport for the relay link.
+  ## wss:// transport: 1.8 fixes startup stop/destroy deadlocks and includes
+  ## the task-exit ordering fix needed before freeing a stopped client.
   espressif/esp_websocket_client:
-    version: "^1.2.0"
+    version: "^1.8.0"
 
   ## Renders the SoftAP credentials as a QR code on the serial console.
   espressif/qrcode:

@@ -5,7 +5,8 @@
  *   - sends the hello frame
  *   - verifies every inbound envelope through auth.c, dispatches, replies
  *   - reconnects with 1 s -> 60 s exponential backoff, +/-20 % jitter
- *   - feeds the task watchdog
+ *   - fences callbacks and queued commands across network/session changes
+ *   - feeds the panic-enabled task watchdog to recover blocked transport calls
  */
 #pragma once
 
@@ -18,7 +19,7 @@
 extern "C" {
 #endif
 
-#define RW_FW_VERSION "1.0.0"
+#define RW_FW_VERSION "1.0.1"
 
 /** Start the relay task. Call once Wi-Fi is up (or about to be). */
 esp_err_t rw_relay_start(void);
@@ -26,7 +27,8 @@ esp_err_t rw_relay_start(void);
 /** True while the websocket is connected and the hello has been sent. */
 bool rw_relay_connected(void);
 
-/** Notify the client that the station got/lost an IP. */
+/** Notify the client that the station got/lost an IP. A loss permanently
+ * invalidates that connection, even if IP returns before the next task poll. */
 void rw_relay_notify_network(bool up);
 
 /** Seconds remaining in the auth-failure lockout window, 0 when not locked. */

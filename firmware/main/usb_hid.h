@@ -39,7 +39,11 @@ esp_err_t rw_hid_wake(void);
 /**
  * Type @p text (US layout, incl. shifted ASCII) and optionally press Enter.
  * Rejects input longer than RW_TYPE_MAX_CHARS or containing characters with
- * no US-layout keycode.
+ * no US-layout keycode before pressing any keys. Both press and release await
+ * USB transfer completion. Actions have an 8 s budget plus bounded cleanup;
+ * on failure the remaining characters/Enter are abandoned, never replayed.
+ * A serialized worker restores neutral state after reconnect/resume. Failed
+ * cleanup detaches/reconnects USB and blocks input until a fresh enumeration.
  */
 esp_err_t rw_hid_type(const char *text, bool enter);
 

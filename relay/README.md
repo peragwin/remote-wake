@@ -19,7 +19,7 @@ All three require `Authorization: Bearer <deviceToken>`. `:deviceId` must match
 | Route | Method | Behaviour |
 |---|---|---|
 | `/v1/device/:deviceId` | GET (Upgrade: websocket) | Device socket. `101` on success. |
-| `/v1/send/:deviceId` | POST | Forwards the envelope, long-polls up to 10 s for the device's response, returns it verbatim with `200`. |
+| `/v1/send/:deviceId` | POST | Forwards the envelope, long-polls up to 20 s for the device's response, returns it verbatim with `200`. |
 | `/v1/presence/:deviceId` | GET | `{"online": bool, "since": <unix seconds>|null}` |
 
 ### Error codes
@@ -39,7 +39,7 @@ All three require `Authorization: Bearer <deviceToken>`. `:deviceId` must match
 | 429 | `rate_limited` | Token bucket exhausted (burst 5, refill 10/min). |
 | 429 | `too_many_pending` | More than 8 commands in flight for this device. |
 | 504 | `device_offline` | No device socket attached. |
-| 504 | `device_timeout` | Device did not answer within 10 s. |
+| 504 | `device_timeout` | Device did not answer within 20 s; the action may already have run. |
 
 ## What the relay knows
 
