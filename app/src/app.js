@@ -218,6 +218,10 @@ function renderStats(res) {
   $('#stat-usb').textContent =
     usb === undefined ? '—' : res.usbSuspended ? 'suspended' : String(usb);
   $('#stat-fw').textContent = res.fw || res.version || '—';
+  // Power-LED sense (docs/protocol.md); absent or "unknown" when not wired.
+  const pc = { on: 'on', off: 'off', sleep: 'asleep' }[res.pc_power];
+  $('#stat-pc-wrap').hidden = !pc;
+  $('#stat-pc').textContent = pc || '—';
 }
 
 async function onWake() {
