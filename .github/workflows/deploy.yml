@@ -28,8 +28,8 @@ jobs:
       SITE_BUCKET: wryskware-remote-wake-app
       DISTRIBUTION_ID: E4JEUPDSL4J3H
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.1.0
         with:
           node-version: 22
       - name: Test app
