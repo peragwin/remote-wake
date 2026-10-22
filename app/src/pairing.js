@@ -12,8 +12,24 @@
  * Dependency-free so it can be unit tested outside a browser.
  */
 
-/** @returns {{deviceId:string, deviceToken:string, relayUrl:string, kid?:string, name?:string}} */
-export function parsePairingBlob(raw) {
+const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+/** True for a loopback hostname as `URL#hostname` / `location.hostname` spell it. */
+export function isLoopbackHost(hostname) {
+  const h = String(hostname ?? '').toLowerCase();
+  return LOOPBACK.has(h) || h === '::1';
+}
+
+/**
+ * @param {string} raw
+ * @param {{appHostname?: string}} [opts] the hostname this app is served from
+ *        (defaults to location.hostname). An http relay is accepted only when
+ *        both it and the app are on loopback: a pairing blob must not be able
+ *        to point a deployed app at a plaintext relay on the phone itself.
+ * @returns {{deviceId:string, deviceToken:string, relayUrl:string, kid?:string, name?:string}}
+ */
+export function parsePairingBlob(raw, opts = {}) {
+  const appHostname = opts.appHostname ?? globalThis.location?.hostname ?? '';
   const text = String(raw ?? '')
     .trim()
     .replace(/^```(?:json)?/i, '')
@@ -51,9 +67,14 @@ export function parsePairingBlob(raw) {
   } catch {
     throw new Error('relayUrl is not a valid URL.');
   }
-  const localhost = url.hostname === 'localhost' || url.hostname === '127.0.0.1';
-  if (url.protocol !== 'https:' && !localhost) {
-    throw new Error('relayUrl must be https (localhost is allowed for development).');
+  if (url.protocol !== 'https:') {
+    const devHttp =
+      url.protocol === 'http:' && isLoopbackHost(url.hostname) && isLoopbackHost(appHostname);
+    if (!devHttp) {
+      throw new Error(
+        'relayUrl must be https (an http localhost relay is allowed only while the app itself runs on localhost).'
+      );
+    }
   }
 
   const result = {
@@ -76,4 +97,30 @@ export function parsePairingBlob(raw) {
     result.kid = kid;
   }
   return result;
+}
+
+/** What the user is shown for a relay: host, plus any base path. */
+export function relayLabel(relayUrl) {
+  try {
+    const url = new URL(relayUrl);
+    const path = url.pathname.replace(/\/+$/, '');
+    return url.host + path;
+  } catch {
+    return String(relayUrl ?? '');
+  }
+}
+
+/**
+ * How a parsed blob would change an already-stored device record (the store
+ * merges `{...existing, ...blob}`). A replaced relay or token re-routes every
+ * future command, so the UI must confirm it explicitly.
+ * @returns {{isNew:boolean, relayChanged:boolean, tokenChanged:boolean}}
+ */
+export function pairingChange(existing, parsed) {
+  if (!existing) return { isNew: true, relayChanged: false, tokenChanged: false };
+  return {
+    isNew: false,
+    relayChanged: (existing.relayUrl ?? '') !== parsed.relayUrl,
+    tokenChanged: (existing.deviceToken ?? '') !== parsed.deviceToken,
+  };
 }

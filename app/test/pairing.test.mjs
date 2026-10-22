@@ -41,13 +41,24 @@ test('carries an optional device name through, clamped', () => {
   assert.equal(parsePairingBlob(JSON.stringify(GOOD)).name, undefined);
 });
 
-test('allows http only for localhost development', () => {
-  assert.doesNotThrow(() => parsePairingBlob(JSON.stringify({ ...GOOD, relayUrl: 'http://localhost:8787' })));
-  assert.doesNotThrow(() => parsePairingBlob(JSON.stringify({ ...GOOD, relayUrl: 'http://127.0.0.1:8787' })));
-  assert.throws(
-    () => parsePairingBlob(JSON.stringify({ ...GOOD, relayUrl: 'http://relay.example.com' })),
-    /must be https/
-  );
+test('allows an http loopback relay only while the app itself runs on loopback', () => {
+  const blob = (relayUrl) => JSON.stringify({ ...GOOD, relayUrl });
+  for (const app of ['localhost', '127.0.0.1', '[::1]']) {
+    for (const relay of ['http://localhost:8787', 'http://127.0.0.1:8787', 'http://[::1]:8787']) {
+      assert.doesNotThrow(() => parsePairingBlob(blob(relay), { appHostname: app }), `${app} ← ${relay}`);
+    }
+  }
+  // A deployed app must not be pointed at a plaintext relay on the phone itself.
+  for (const app of ['remote-wake.example.com', '']) {
+    assert.throws(() => parsePairingBlob(blob('http://localhost:8787'), { appHostname: app }), /must be https/);
+    assert.throws(() => parsePairingBlob(blob('http://127.0.0.1:8787'), { appHostname: app }), /must be https/);
+  }
+  // Never a non-loopback http relay, and never another scheme, even in development.
+  assert.throws(() => parsePairingBlob(blob('http://relay.example.com'), { appHostname: 'localhost' }), /must be https/);
+  assert.throws(() => parsePairingBlob(blob('ftp://localhost/'), { appHostname: 'localhost' }), /must be https/);
+  assert.throws(() => parsePairingBlob(blob('ws://localhost:8787'), { appHostname: 'localhost' }), /must be https/);
+  // https is fine wherever the app runs.
+  assert.doesNotThrow(() => parsePairingBlob(blob('https://localhost:8787'), { appHostname: 'remote-wake.example.com' }));
 });
 
 test('rejects malformed identifiers', () => {

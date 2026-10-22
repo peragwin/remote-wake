@@ -14,7 +14,7 @@ import { createPresencePoller, errorMessage, RelayError } from './api.js';
 import { toast, sheet, confirmDestructive, attachHold, copyText, flash } from './ui.js';
 import { PRESETS, prettyChord, parseChord } from './keys.js';
 import { toSVG } from './qr.js';
-import { parsePairingBlob } from './pairing.js';
+import { parsePairingBlob, pairingChange, relayLabel } from './pairing.js';
 
 const state = {
   device: null,
@@ -422,6 +422,9 @@ async function onPairSave() {
     return;
   }
 
+  const existing = await store.getDevice(parsed.deviceId);
+  if (!(await confirmPairing(existing, parsed))) return;
+
   const name = $('#pair-name').value.trim() || parsed.name || 'My PC';
   // One key per phone; `kid` is the slot THIS device filed it under. v1's
   // /pair reply does not report the slot, so default to p1 (correctable in
@@ -442,6 +445,38 @@ async function onPairSave() {
   poller?.start();
   showView('home');
   toast('ok', 'Device paired', `${name} is ready.`);
+}
+
+/**
+ * Every command for a device goes to the relay its blob names, with its token.
+ * Show that relay before trusting it, and make replacing a stored relay or
+ * token an explicit, destructive-styled choice — a pasted blob is untrusted.
+ */
+async function confirmPairing(existing, parsed) {
+  const change = pairingChange(existing, parsed);
+  const relay = relayLabel(parsed.relayUrl);
+  if (!change.isNew && (change.relayChanged || change.tokenChanged)) {
+    const what = [change.relayChanged && 'relay', change.tokenChanged && 'device token']
+      .filter(Boolean)
+      .join(' and ');
+    return confirmDestructive({
+      title: `Replace the ${what} for ${existing.name || existing.deviceId}?`,
+      body:
+        `Commands for this device will go to ${relay}` +
+        (change.relayChanged ? ` instead of ${relayLabel(existing.relayUrl)}` : '') +
+        '. Only continue if you just re-paired the device yourself and its setup page showed this relay.',
+      confirmLabel: `Use ${relay}`,
+    });
+  }
+  const ok = await sheet({
+    title: change.isNew ? 'Pair through this relay?' : 'Re-pair this device?',
+    body: `Commands will be sent through ${relay}. Check that this is the relay you deployed.`,
+    actions: [
+      { label: 'Pair', value: true, style: 'primary' },
+      { label: 'Cancel', value: false },
+    ],
+  });
+  return ok === true;
 }
 
 async function offerWebAuthn() {

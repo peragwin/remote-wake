@@ -111,8 +111,11 @@ Implements `docs/security.md`'s "phone is trusted" boundary:
 - **Service worker.** Never caches anything under `/v1/`, never touches
   non-GET requests. A cached command or a stale "online" would both be wrong.
 - **Pairing input** is validated strictly: 16 lowercase hex `deviceId`,
-  43-character base64url `deviceToken`, https relay URL (localhost allowed for
-  development).
+  43-character base64url `deviceToken`, https relay URL (an http loopback relay
+  is accepted only while the app itself is served from loopback, for
+  development). The relay host is shown before pairing, and a blob that would
+  replace a paired device's relay or token needs an explicit, destructive-styled
+  confirmation naming the new relay.
 
 ---
 
