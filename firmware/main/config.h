@@ -60,6 +60,10 @@ esp_err_t rw_config_set_relay_url(const char *url);
 /** Remove any override so CONFIG_RW_RELAY_URL applies. */
 esp_err_t rw_config_clear_relay_url(void);
 
+/** Relay base as the https:// (or http://) URL the PWA posts to; any
+ *  configured scheme is normalized. Used in the pairing blob. */
+esp_err_t rw_config_relay_http_url(char *out, size_t out_sz);
+
 /** Build the full device websocket endpoint: <base>/v1/device/<deviceId>. */
 esp_err_t rw_config_relay_ws_url(char *out, size_t out_sz);
 

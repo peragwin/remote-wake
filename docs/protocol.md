@@ -139,7 +139,8 @@ hash and presence.
    public key → `/pair {"pubkey": "<b64url>", "name": "Alex's phone"}`.
    The device stores a relay URL only as an explicit override of its
    firmware default (`CONFIG_RW_RELAY_URL`); `relayUrl` in every response is
-   the effective URL.
+   the effective URL. In the `/pair` reply it is always the `https://` (or
+   `http://`) base the PWA posts to, whatever scheme was configured.
 3. Device replies `{"deviceId": ..., "deviceToken": ..., "relayUrl": ...,
    "kid": "p1"}` (`kid` = the slot the key was stored in),
    which the PWA stores locally; device stores pubkey in slot `p1`

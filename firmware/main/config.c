@@ -301,10 +301,11 @@ esp_err_t rw_config_clear_relay_url(void)
     return erase_key(K_RELAY);
 }
 
-esp_err_t rw_config_relay_ws_url(char *out, size_t out_sz)
+/* Split the configured relay base into "is TLS" and a host[:port][/path]
+ * with no trailing slash. Accepts wss/ws/https/http or a bare host. */
+static esp_err_t relay_base(char *base, size_t base_sz, const char **host, bool *tls)
 {
-    char base[RW_RELAY_URL_MAXLEN];
-    esp_err_t err = rw_config_get_relay_url(base, sizeof(base));
+    esp_err_t err = rw_config_get_relay_url(base, base_sz);
     if (err != ESP_OK) {
         return err;
     }
@@ -318,22 +319,49 @@ esp_err_t rw_config_relay_ws_url(char *out, size_t out_sz)
         return ESP_ERR_INVALID_STATE;
     }
 
-    /* Accept https:// / http:// / bare host and normalize to ws(s)://. */
-    const char *host = base;
-    const char *scheme = "wss://";
+    *host = base;
+    *tls = true;
     if (strncmp(base, "wss://", 6) == 0) {
-        host = base + 6;
+        *host = base + 6;
     } else if (strncmp(base, "ws://", 5) == 0) {
-        host = base + 5;
-        scheme = "ws://";
+        *host = base + 5;
+        *tls = false;
     } else if (strncmp(base, "https://", 8) == 0) {
-        host = base + 8;
+        *host = base + 8;
     } else if (strncmp(base, "http://", 7) == 0) {
-        host = base + 7;
-        scheme = "ws://";
+        *host = base + 7;
+        *tls = false;
+    }
+    return ESP_OK;
+}
+
+esp_err_t rw_config_relay_http_url(char *out, size_t out_sz)
+{
+    char base[RW_RELAY_URL_MAXLEN];
+    const char *host;
+    bool tls;
+    esp_err_t err = relay_base(base, sizeof(base), &host, &tls);
+    if (err != ESP_OK) {
+        return err;
+    }
+    int n = snprintf(out, out_sz, "%s%s", tls ? "https://" : "http://", host);
+    if (n < 0 || (size_t)n >= out_sz) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+    return ESP_OK;
+}
+
+esp_err_t rw_config_relay_ws_url(char *out, size_t out_sz)
+{
+    char base[RW_RELAY_URL_MAXLEN];
+    const char *host;
+    bool tls;
+    esp_err_t err = relay_base(base, sizeof(base), &host, &tls);
+    if (err != ESP_OK) {
+        return err;
     }
 
-    int n = snprintf(out, out_sz, "%s%s/v1/device/%s", scheme, host,
+    int n = snprintf(out, out_sz, "%s%s/v1/device/%s", tls ? "wss://" : "ws://", host,
                      rw_config_device_id());
     if (n < 0 || (size_t)n >= out_sz) {
         return ESP_ERR_INVALID_SIZE;
