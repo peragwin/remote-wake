@@ -302,7 +302,7 @@ esp_err_t rw_config_clear_relay_url(void)
 }
 
 /* Split the configured relay base into "is TLS" and a host[:port][/path]
- * with no trailing slash. Accepts wss/ws/https/http or a bare host. */
+ * with no trailing slash. Accepts wss/ws/https/http (any case) or a bare host. */
 static esp_err_t relay_base(char *base, size_t base_sz, const char **host, bool *tls)
 {
     esp_err_t err = rw_config_get_relay_url(base, base_sz);
@@ -321,14 +321,14 @@ static esp_err_t relay_base(char *base, size_t base_sz, const char **host, bool 
 
     *host = base;
     *tls = true;
-    if (strncmp(base, "wss://", 6) == 0) {
+    if (strncasecmp(base, "wss://", 6) == 0) {
         *host = base + 6;
-    } else if (strncmp(base, "ws://", 5) == 0) {
+    } else if (strncasecmp(base, "ws://", 5) == 0) {
         *host = base + 5;
         *tls = false;
-    } else if (strncmp(base, "https://", 8) == 0) {
+    } else if (strncasecmp(base, "https://", 8) == 0) {
         *host = base + 8;
-    } else if (strncmp(base, "http://", 7) == 0) {
+    } else if (strncasecmp(base, "http://", 7) == 0) {
         *host = base + 7;
         *tls = false;
     }

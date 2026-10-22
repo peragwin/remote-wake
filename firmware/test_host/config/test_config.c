@@ -281,32 +281,16 @@ static void test_derived_urls_never_truncate(void)
     EXPECT_STR("longest http", got, want);
 }
 
-/* KNOWN DEFECT, strict expected failure. URI schemes are case-insensitive
- * (RFC 3986) and the placeholder check already treats them so, but the
- * scheme mapping matches only lower case: "Https://r.test" is taken for a
- * bare host and pairs as "https://Https://r.test". Once fixed this aborts
- * with XPASS; then turn these into ordinary check_norm() cases. */
-static void xfail_mixed_case_scheme(void)
+/* URI schemes are case-insensitive (RFC 3986); the placeholder check
+ * already treats them so, and the mapping must agree. */
+static void test_mixed_case_scheme(void)
 {
     static const norm_case_t cases[] = {
         {"Https://r.test", "https://r.test", "wss://r.test"},
         {"WSS://r.test",   "https://r.test", "wss://r.test"},
     };
-    unsigned failing = 0;
     for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
-        fresh_device();
-        EXPECT(rw_config_set_relay_url(cases[i].stored) == ESP_OK, cases[i].stored);
-        char got[256];
-        esp_err_t err = rw_config_relay_http_url(got, sizeof got);
-        if (err != ESP_OK || strcmp(got, cases[i].http) != 0) {
-            printf("XFAIL known defect: %s pairs as \"%s\", want \"%s\"\n",
-                   cases[i].stored, err == ESP_OK ? got : "(error)", cases[i].http);
-            failing++;
-        }
-    }
-    if (failing == 0) {
-        fprintf(stderr, "XPASS: mixed-case schemes now normalize; make them ordinary cases\n");
-        abort();
+        check_norm(&cases[i]);
     }
 }
 
@@ -321,7 +305,7 @@ int main(void)
     test_length_limits();
     test_scheme_normalization();
     test_derived_urls_never_truncate();
-    xfail_mixed_case_scheme();
+    test_mixed_case_scheme();
     printf("config relay URL tests passed (default %s)\n", DEFAULT_URL);
     return 0;
 }

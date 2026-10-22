@@ -232,6 +232,14 @@ static esp_err_t h_pair(httpd_req_t *req)
         return send_error(req, "400 Bad Request", "bad_pubkey");
     }
 
+    /* The PWA accepts only an http(s) relay base; normalize a wss:// default.
+     * Resolve it before enrolling the key so a bad relay leaves no orphan slot. */
+    char relay[RW_RELAY_URL_MAXLEN + 8] = {0};
+    if (rw_config_relay_http_url(relay, sizeof(relay)) != ESP_OK) {
+        cJSON_Delete(in);
+        return send_error(req, "500 Internal Server Error", "bad_relay");
+    }
+
     char kid[4] = {0};
     esp_err_t err = rw_config_add_key(
         pub, cJSON_IsString(j_name) ? j_name->valuestring : NULL, kid);
@@ -243,10 +251,6 @@ static esp_err_t h_pair(httpd_req_t *req)
     if (err != ESP_OK) {
         return send_error(req, "500 Internal Server Error", esp_err_to_name(err));
     }
-
-    /* The PWA accepts only an http(s) relay base; normalize a wss:// default. */
-    char relay[RW_RELAY_URL_MAXLEN + 8] = {0};
-    rw_config_relay_http_url(relay, sizeof(relay));
 
     cJSON *o = cJSON_CreateObject();
     cJSON_AddStringToObject(o, "deviceId", rw_config_device_id());
