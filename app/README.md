@@ -171,44 +171,38 @@ key generation, the pairing round-trip and the install prompt.
 
 The existing installation is **https://remote-wake.wryskware.dev/**, served
 from **Amazon S3 through CloudFront**. Keep that origin when updating: the
-phone's pairing key and settings are stored against it. The bucket, origin
-prefix (if any), and distribution ID are not recorded in this repository.
+phone's pairing key and settings are stored against it. The workflow targets the existing bucket and distribution listed below.
 
-GitHub's current [CI workflow](../.github/workflows/ci.yml) builds and tests
-on pushes and pull requests; it does **not deploy** the website or relay.
-Automatic publishing would need a separate deployment workflow and AWS
-authentication, preferably GitHub OIDC with access limited to this site.
+The [deployment workflow](../.github/workflows/deploy.yml) publishes changes
+under `app/` automatically when pushed to `main`. You can also select
+**Actions → Deploy website → Run workflow → main** to redeploy. App tests must
+pass before publishing. Deployments run one at a time and reject other branches.
 
-From a machine already signed into the hosting AWS account, find the existing
-distribution and its S3 origin:
+The existing production resources are:
 
-```sh
-aws cloudfront list-distributions \
-  --query 'DistributionList.Items[?Aliases.Items && contains(Aliases.Items, `remote-wake.wryskware.dev`)].{Id:Id,Origins:Origins.Items[*].{DomainName:DomainName,OriginPath:OriginPath}}' \
-  --output json
-```
+- S3 bucket: `wryskware-remote-wake-app` (bucket root, `us-east-1`)
+- CloudFront distribution: `E4JEUPDSL4J3H`
+- AWS role: `arn:aws:iam::040630189325:role/remote-wake-github-deploy`
 
-For the current transport update, upload these two changed assets from the
-repository root to that bucket and origin prefix, preserving the live site's
-content types and cache policy, then invalidate their public paths. Replace
-the placeholders with the existing hosting values:
+GitHub authenticates with OIDC; no AWS access keys or GitHub secrets are needed.
+The role trusts only `repo:peragwin/remote-wake:ref:refs/heads/main` with audience
+`sts.amazonaws.com`. Its inline policy allows `s3:PutObject` only in this bucket
+and `cloudfront:CreateInvalidation` / `cloudfront:GetInvalidation` only on this
+distribution. The account's existing GitHub OIDC provider is reused.
 
-```sh
-aws s3 cp app/src/api.js s3://<existing-bucket-and-prefix>/src/api.js \
-  --content-type 'text/javascript; charset=utf-8' \
-  --cache-control 'no-cache, must-revalidate'
-aws s3 cp app/sw.js s3://<existing-bucket-and-prefix>/sw.js \
-  --content-type 'text/javascript; charset=utf-8' \
-  --cache-control 'no-cache, must-revalidate'
-aws cloudfront create-invalidation \
-  --distribution-id <existing-distribution-id> \
-  --paths '/src/api.js' '/sw.js'
-```
+The workflow stages only runtime files (excluding tests, tools and package
+metadata), stamps the deployed service worker's cache version with the commit
+SHA, uploads assets before the HTML and service worker, invalidates `/*`, waits
+for completion, and verifies the live service worker contains that SHA. Files
+use revalidation cache headers. The workflow does not delete S3 objects.
 
-Bump `CACHE_VERSION` in `sw.js` whenever shipping changed assets; this update
-uses `v2`. Reopen the installed app after deployment so it receives the new
-service worker and cached assets. Future releases must also upload any other
-changed runtime assets and invalidate their corresponding paths.
+For local/manual deployments, continue bumping `CACHE_VERSION` in `sw.js` when
+shipping changed assets. GitHub deployments set it automatically in the staged
+copy. Reopen the installed app after deployment to receive the updated cache.
+
+This deploys the PWA website. The Cloudflare relay is a separate service; see
+[`relay/README.md`](../relay/README.md). Firmware still needs to be flashed to
+the physical device.
 
 Any static host. Must be **https or localhost** — WebCrypto, WebAuthn and
 service workers all require a secure context. Point `relayUrl` at your relay

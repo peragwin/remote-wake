@@ -1,0 +1,92 @@
+name: Deploy website
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-website-production
+  cancel-in-progress: false
+
+jobs:
+  website:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: us-east-1
+      SITE_BUCKET: wryskware-remote-wake-app
+      DISTRIBUTION_ID: E4JEUPDSL4J3H
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Test app
+        working-directory: app
+        run: npm test
+      - name: Prepare runtime assets
+        env:
+          SITE_DIR: ${{ runner.temp }}/remote-wake-site
+        run: |
+          mkdir -p "$SITE_DIR"
+          cp -R app/src app/vendor app/icons "$SITE_DIR/"
+          cp app/index.html app/styles.css app/manifest.webmanifest app/sw.js "$SITE_DIR/"
+          node --input-type=module <<'JS'
+          import { readFileSync, writeFileSync } from 'node:fs';
+          const path = `${process.env.SITE_DIR}/sw.js`;
+          const source = readFileSync(path, 'utf8');
+          const updated = source.replace(/^const CACHE_VERSION = '[^']+';$/m,
+            `const CACHE_VERSION = '${process.env.GITHUB_SHA}';`);
+          if (updated === source) throw new Error('Service worker cache version was not updated');
+          writeFileSync(path, updated);
+          JS
+      - name: Authenticate to AWS
+        uses: aws-actions/configure-aws-credentials@v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::040630189325:role/remote-wake-github-deploy
+          aws-region: ${{ env.AWS_REGION }}
+          allowed-account-ids: '040630189325'
+      - name: Upload runtime assets
+        env:
+          SITE_DIR: ${{ runner.temp }}/remote-wake-site
+        run: |
+          aws s3 cp "$SITE_DIR/" "s3://$SITE_BUCKET/" --recursive \
+            --exclude '*.js' --exclude 'index.html' --exclude 'manifest.webmanifest' \
+            --cache-control 'no-cache, must-revalidate' --only-show-errors
+          aws s3 cp "$SITE_DIR/" "s3://$SITE_BUCKET/" --recursive \
+            --exclude '*' --include '*.js' --exclude 'sw.js' \
+            --content-type 'text/javascript; charset=utf-8' \
+            --cache-control 'no-cache, must-revalidate' --only-show-errors
+          aws s3 cp "$SITE_DIR/manifest.webmanifest" "s3://$SITE_BUCKET/manifest.webmanifest" \
+            --content-type 'application/manifest+json' \
+            --cache-control 'no-cache, must-revalidate' --only-show-errors
+          aws s3 cp "$SITE_DIR/index.html" "s3://$SITE_BUCKET/index.html" \
+            --content-type 'text/html; charset=utf-8' \
+            --cache-control 'no-cache, must-revalidate' --only-show-errors
+          aws s3 cp "$SITE_DIR/sw.js" "s3://$SITE_BUCKET/sw.js" \
+            --content-type 'text/javascript; charset=utf-8' \
+            --cache-control 'no-cache, must-revalidate' --only-show-errors
+      - name: Invalidate CloudFront and wait
+        run: |
+          invalidation_id=$(aws cloudfront create-invalidation \
+            --distribution-id "$DISTRIBUTION_ID" --paths '/*' \
+            --query 'Invalidation.Id' --output text)
+          aws cloudfront wait invalidation-completed \
+            --distribution-id "$DISTRIBUTION_ID" --id "$invalidation_id"
+      - name: Check live website
+        run: |
+          curl --fail --silent --show-error --retry 5 --retry-all-errors \
+            https://remote-wake.wryskware.dev/ --output /dev/null
+          curl --fail --silent --show-error --retry 5 --retry-all-errors \
+            https://remote-wake.wryskware.dev/sw.js | grep -F "const CACHE_VERSION = '$GITHUB_SHA';"

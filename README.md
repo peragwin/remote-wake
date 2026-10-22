@@ -50,3 +50,11 @@ mint commands. Full threat model: [`docs/security.md`](docs/security.md).
 
 Chip support: **ESP32-S3** (full: USB HID + GPIO). Classic ESP32 / ESP32-C3
 have no usable USB OTG — they build in a *power-button-only* profile.
+
+## Deployment
+
+`main` is the default branch. Website changes pushed to `main` are tested and
+published to https://remote-wake.wryskware.dev/ by
+[Deploy website](.github/workflows/deploy.yml). You can also run that workflow
+manually from GitHub Actions. See [app deployment](app/README.md#deploying) for
+the AWS resources and authentication.
