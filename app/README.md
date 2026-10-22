@@ -95,7 +95,8 @@ Implements `docs/security.md`'s "phone is trusted" boundary:
   **discarded** — it is a local presence check, not part of the protocol, and
   is never transmitted. Registration uses a platform authenticator and skips
   gracefully when none exists (Settings says so plainly). The toggle is there,
-  and turning it *off* requires confirming what you lose.
+  and turning it *off* requires confirming what you lose and then passing
+  the gate once more.
   - The gate also guards *saving* the unlock text, since the secret is the
     asset, not just its use.
   - **Deliberate exception:** the read-only `status`/`ping` refresh skips the

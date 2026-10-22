@@ -672,6 +672,14 @@ async function onToggleWebAuthn(e) {
       e.target.checked = true;
       return;
     }
+    // Whoever turns the gate off must be able to pass it first.
+    try {
+      await webauthn.requirePresence();
+    } catch {
+      e.target.checked = true;
+      toast('err', 'Cancelled', 'Identity check is required to turn the gate off.');
+      return;
+    }
     await webauthn.disableGate();
     toast('info', 'Biometric gate off');
   }
