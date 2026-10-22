@@ -185,8 +185,10 @@ The existing production resources are:
 - AWS role: `arn:aws:iam::040630189325:role/remote-wake-github-deploy`
 
 GitHub authenticates with OIDC; no AWS access keys or GitHub secrets are needed.
-The role trusts only the immutable subject
-`repo:peragwin@6548205/remote-wake@1344290367:ref:refs/heads/main` with audience
+Each deploy runs in the GitHub `production` environment, which requires a
+reviewer's approval and accepts only `main`. The role trusts only that
+environment's immutable subject
+`repo:peragwin@6548205/remote-wake@1344290367:environment:production` with audience
 `sts.amazonaws.com` (GitHub includes owner and repository IDs in this repo's OIDC subject). Its inline policy allows `s3:PutObject` only in this bucket
 and `cloudfront:CreateInvalidation` / `cloudfront:GetInvalidation` only on this
 distribution. The account's existing GitHub OIDC provider is reused.
