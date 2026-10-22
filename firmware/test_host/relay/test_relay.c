@@ -15,6 +15,9 @@ static int mock_destroy_calls;
 static int mock_wdt_feeds;
 static int mock_restarts;
 static int mock_actions;
+static esp_err_t mock_power_result;
+static bool mock_power_dispatch;
+static char mock_error[32];
 static esp_err_t mock_wdt_add_result;
 static bool mock_auto_connect = true;
 static bool mock_drop_in_verify;
@@ -263,9 +266,26 @@ static void test_queue_loss_before_dispatch(void)
     teardown_client();
 }
 
+static void test_disabled_power_dispatch(void)
+{
+    reset();
+    mock_power_dispatch = true;
+    mock_power_result = ESP_ERR_NOT_SUPPORTED;
+    rw_cmd_t cmd = {0};
+    strcpy(cmd.act, "power_tap");
+    dispatch(&cmd);
+    assert(mock_actions == 1 && !strcmp(mock_error, "internal"));
+    strcpy(cmd.act, "power_hold");
+    dispatch(&cmd);
+    assert(mock_actions == 2 && !strcmp(mock_error, "internal"));
+    mock_power_dispatch = false;
+    mock_power_result = ESP_OK;
+}
+
 int main(void)
 {
     s_rx_queue = &mock_queue;
+    test_disabled_power_dispatch();
     test_fragmentation();
     test_drop_entire_bad_message();
     test_session_fence();
@@ -369,7 +389,7 @@ void cJSON_free(void *item) { free(item); }
 char *cJSON_PrintUnformatted(const cJSON *item) { return strdup("{}"); }
 cJSON *cJSON_ParseWithLength(const char *text, size_t len) { return cJSON_CreateObject(); }
 cJSON *cJSON_GetObjectItemCaseSensitive(const cJSON *item, const char *name)
-{ static cJSON value = {.valuestring = "mock"}; return &value; }
+{ static cJSON value = {.valuestring = "mock"}; return mock_power_dispatch ? NULL : &value; }
 bool cJSON_IsObject(const cJSON *item) { return item != NULL; }
 bool cJSON_IsString(const cJSON *item) { return item != NULL; }
 bool cJSON_IsNumber(const cJSON *item) { return false; }
@@ -377,7 +397,8 @@ bool cJSON_IsBool(const cJSON *item) { return false; }
 bool cJSON_IsTrue(const cJSON *item) { return false; }
 bool cJSON_IsArray(const cJSON *item) { return false; }
 void cJSON_AddNumberToObject(cJSON *item, const char *name, double value) { }
-void cJSON_AddStringToObject(cJSON *item, const char *name, const char *value) { }
+void cJSON_AddStringToObject(cJSON *item, const char *name, const char *value)
+{ if (!strcmp(name, "err")) snprintf(mock_error, sizeof(mock_error), "%s", value); }
 void cJSON_AddBoolToObject(cJSON *item, const char *name, bool value) { }
 void cJSON_AddItemToObject(cJSON *item, const char *name, cJSON *value) { free(value); }
 bool rw_config_get_key(const char *kid, uint8_t out[32]) { return true; }
@@ -405,5 +426,5 @@ bool rw_hid_suspended(void) { return false; }
 esp_err_t rw_hid_wake(void) { ++mock_actions; return ESP_OK; }
 esp_err_t rw_hid_type(const char *text, bool enter) { ++mock_actions; return ESP_OK; }
 esp_err_t rw_hid_keys(const cJSON *seq) { ++mock_actions; return ESP_OK; }
-esp_err_t rw_power_tap(uint32_t ms) { ++mock_actions; return ESP_OK; }
-esp_err_t rw_power_hold(uint32_t ms) { ++mock_actions; return ESP_OK; }
+esp_err_t rw_power_tap(uint32_t ms) { ++mock_actions; return mock_power_result; }
+esp_err_t rw_power_hold(uint32_t ms) { ++mock_actions; return mock_power_result; }

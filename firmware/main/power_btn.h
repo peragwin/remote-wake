@@ -23,12 +23,13 @@ extern "C" {
 #define RW_HOLD_MS_MAX  12000
 #define RW_HOLD_MS_DEF  6000
 
-/** Configure the GPIO to its safe idle level. Call this first in app_main(). */
+/** Configure the GPIO to its safe idle level. Call this first in app_main().
+ * With CONFIG_RW_PWR_ENABLED=n, succeeds without touching any GPIO. */
 esp_err_t rw_power_btn_init(void);
 
 /**
  * Drive PWR_SW for @p ms.
- * @return ESP_OK, ESP_ERR_INVALID_ARG when @p ms is out of the caller's range,
+ * @return ESP_ERR_NOT_SUPPORTED when CONFIG_RW_PWR_ENABLED=n, ESP_OK, ESP_ERR_INVALID_ARG when @p ms is out of the caller's range,
  *         or ESP_ERR_INVALID_STATE when another pulse is already running
  *         (the caller answers "busy").
  */

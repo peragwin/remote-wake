@@ -18,6 +18,12 @@ esp_err_t rw_hid_init(void)
     ESP_LOGI(TAG, "power-only profile: USB HID disabled");
     return ESP_OK;
 }
+esp_err_t rw_hid_init_external(void) { return rw_hid_init(); }
+const uint8_t *rw_hid_report_descriptor(size_t *length)
+{
+    if (length) *length = 0;
+    return NULL;
+}
 bool rw_hid_available(void) { return false; }
 bool rw_hid_mounted(void)   { return false; }
 bool rw_hid_suspended(void) { return false; }
@@ -90,12 +96,17 @@ static const char *s_str_desc[5] = {
     "remote-wake HID",           /* 4: HID interface */
 };
 
+const uint8_t *rw_hid_report_descriptor(size_t *length)
+{
+    if (length) *length = sizeof(s_hid_report_desc);
+    return s_hid_report_desc;
+}
+
 /* --------------------------------------------------- tinyusb callbacks -- */
 
 uint8_t const *tud_hid_descriptor_report_cb(uint8_t instance)
 {
-    (void)instance;
-    return s_hid_report_desc;
+    return instance == HID_INSTANCE ? s_hid_report_desc : NULL;
 }
 
 uint16_t tud_hid_get_report_cb(uint8_t instance, uint8_t report_id,
@@ -212,7 +223,7 @@ bool rw_hid_mounted(void)
 }
 bool rw_hid_suspended(void) { return s_installed && tud_suspended(); }
 
-esp_err_t rw_hid_init(void)
+static esp_err_t init(bool external)
 {
     if (s_installed) {
         return ESP_OK;
@@ -244,7 +255,7 @@ esp_err_t rw_hid_init(void)
         .configuration_descriptor = s_cfg_desc,
         .self_powered             = false,
     };
-    esp_err_t err = tinyusb_driver_install(&tusb_cfg);
+    esp_err_t err = external ? ESP_OK : tinyusb_driver_install(&tusb_cfg);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "tinyusb_driver_install: %s", esp_err_to_name(err));
         vTaskDelete(s_recovery_task);
@@ -257,6 +268,9 @@ esp_err_t rw_hid_init(void)
     ESP_LOGI(TAG, "USB HID keyboard installed (serial %s)", s_serial);
     return ESP_OK;
 }
+
+esp_err_t rw_hid_init(void) { return init(false); }
+esp_err_t rw_hid_init_external(void) { return init(true); }
 
 /* ---------------------------------------------------------- report i/o -- */
 

@@ -10,8 +10,16 @@ menu "remote-wake"
             "usb_down". This is auto-selected on targets whose SoC has no
             USB-OTG device peripheral (classic ESP32, ESP32-C3, ...).
 
+    config RW_PWR_ENABLED
+        bool "Physical PWR_SW output"
+        default y
+        help
+            Disable on boards with no power-button circuit. No GPIO is touched;
+            power commands answer the protocol v1 "internal" error.
+
     config RW_PWR_GPIO
         int "PWR_SW optocoupler GPIO"
+        depends on RW_PWR_ENABLED
         range 0 48
         default 5
         help

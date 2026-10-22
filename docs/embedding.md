@@ -75,13 +75,12 @@ a general-purpose start/stop service; call startup functions once.
    run a competing Wi-Fi reconnect manager. A host-managed Wi-Fi adapter is
    not provided by this extraction.
 
-The power output currently has no disable option: the relay still exposes
-`power_tap` and `power_hold`, and `rw_power_btn_init()` configures its GPIO.
-An application with no PWR_SW circuit needs an explicit generic power-disable
-extension before those actions can be omitted safely. Until then, the power
-output must use a genuinely unused, harmless GPIO; it must never share a
-pin with an LCD, backlight or other board function. Merely skipping its
-initialization is not a supported disable mechanism.
+Set `CONFIG_RW_PWR_ENABLED=n` when the board has no PWR_SW circuit.
+`rw_power_btn_init()` then succeeds without touching GPIOs, registering shutdown
+handlers or allocating locks; pulses return `ESP_ERR_NOT_SUPPORTED` and busy is
+always false. Protocol v1 has no disabled-power error, so signed `power_tap` and
+`power_hold` commands return `internal`, never the misleading `usb_down`.
+The default remains enabled for existing standalone installations.
 
 The existing status LED is an optional component service, not a display
 extension API. Display drivers, rendering, themes, board presets and host
@@ -97,20 +96,35 @@ bundle, WebSocket transport, a panic-enabled initialized task watchdog with a
 component does not replace the application's partition table, watchdog policy
 or console settings. Existing compile-time watchdog checks still apply.
 
-## USB limitation
+## USB ownership
 
-`rw_hid_init()` currently installs TinyUSB itself with the existing
-keyboard-only descriptors and callbacks. The application must give this
-module sole ownership of the USB-OTG device stack and configure one HID
-interface, with CDC/MSC/network classes disabled, as in the S3 defaults.
-It cannot be combined with an independently installed CDC, vendor or composite
-USB device. USB Serial/JTAG hardware is a separate peripheral where supported.
+`rw_hid_init()` installs TinyUSB with the standalone keyboard-only descriptors.
+For a composite device, call `rw_hid_init_external()` instead, **before** the
+application installs TinyUSB. It initializes the same action lock, recovery
+worker and lifecycle state without installing a driver. Call startup once and
+do not mix these modes. Initialize config/auth first as in the normal boot flow.
 
-A composite keyboard plus telemetry interface requires a future explicit
-single-owner USB integration and descriptor/callback refactor, followed by
-hardware validation. It is not implemented by this component extraction.
-`CONFIG_RW_PROFILE_POWER_ONLY` keeps the existing no-HID implementation and
-protocol `usb_down` responses on targets without USB-OTG.
+The application owns device, configuration and string descriptors and the sole
+TinyUSB installation. Include exactly one HID interface (HID instance 0), using
+non-boot protocol, report ID 1, an interrupt IN endpoint with at least 9 bytes,
+and the bytes returned by `rw_hid_report_descriptor(&length)`. The descriptor
+has static lifetime. Other non-HID classes, such as a vendor telemetry interface,
+may coexist with their own endpoints and callbacks. Enable remote wakeup in the
+configuration descriptor when host wake is required. Configure TinyUSB class
+counts and endpoint allocation in the application.
+
+remote-wake owns all `tud_hid_*` callbacks and `tud_mount_cb`, `tud_umount_cb`,
+`tud_suspend_cb`, `tud_resume_cb`; the application must not define competing
+callbacks. These lifecycle callbacks are essential to prevent stale reports
+from being accepted after a bus reset. Recovery may disconnect/reconnect the
+**whole composite device** after a failed neutral report; other interfaces
+must tolerate that. External initialization does not implement stack teardown
+or runtime reconfiguration. Validate composition and host wake on hardware.
+
+`CONFIG_RW_PROFILE_POWER_ONLY` retains no-HID behavior: both initialization
+functions succeed, the report descriptor is NULL with length zero, and HID
+commands return protocol `usb_down`. USB Serial/JTAG is a separate peripheral
+where supported.
 
 ## Validation
 

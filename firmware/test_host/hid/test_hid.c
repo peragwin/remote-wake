@@ -179,6 +179,23 @@ static cJSON chord(const char **names, int count, cJSON *items)
 
 static void test_init(void)
 {
+    size_t descriptor_len = 0;
+    assert(rw_hid_report_descriptor(&descriptor_len) == s_hid_report_desc);
+    assert(descriptor_len == sizeof(s_hid_report_desc));
+#ifdef TEST_EXTERNAL_INIT
+    /* Installing must never be attempted, even when the mock would fail. */
+    install_fail = true;
+    mutex_fail = true;
+    assert(rw_hid_init_external() == ESP_ERR_NO_MEM);
+    mutex_fail = false;
+    task_fail = true;
+    assert(rw_hid_init_external() == ESP_ERR_NO_MEM);
+    task_fail = false;
+    assert(rw_hid_init_external() == ESP_OK);
+    assert(created_task == recovery_task && rw_hid_available());
+    assert(rw_hid_init_external() == ESP_OK);
+    return;
+#endif
     mutex_fail = true;
     assert(rw_hid_init() == ESP_ERR_NO_MEM);
     mutex_fail = false; task_fail = true;

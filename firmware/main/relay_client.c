@@ -424,7 +424,8 @@ static void dispatch(const rw_cmd_t *cmd)
             return;
         }
         esp_err_t e = hold ? rw_power_hold(ms) : rw_power_tap(ms);
-        const char *pe = esp_err_to_proto(e);
+        /* Protocol v1 has no power-disabled error; do not mislabel it usb_down. */
+        const char *pe = e == ESP_ERR_NOT_SUPPORTED ? "internal" : esp_err_to_proto(e);
         if (pe) {
             respond_err(cmd->id, pe);
         } else {

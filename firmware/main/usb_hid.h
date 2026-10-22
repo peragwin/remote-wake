@@ -8,6 +8,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #include "cJSON.h"
 #include "esp_err.h"
@@ -22,6 +23,20 @@ extern "C" {
 
 /** Install the TinyUSB driver and the HID interface. */
 esp_err_t rw_hid_init(void);
+
+/** Initialize locks/recovery before the application installs TinyUSB once.
+ * Application owns device/configuration/string descriptors. remote-wake owns
+ * all tud_hid_* callbacks and tud_mount/umount/suspend/resume_cb. Use exactly
+ * one HID instance (0), non-boot keyboard, report ID 1, with the descriptor
+ * below; other non-HID classes may coexist. Recovery may detach/reconnect the
+ * entire composite device. Do not mix initialization modes or reinstall USB.
+ */
+esp_err_t rw_hid_init_external(void);
+
+/** Static keyboard report descriptor; length may be NULL.
+ * Power-only profile returns NULL and length 0.
+ */
+const uint8_t *rw_hid_report_descriptor(size_t *length);
 
 /** True when the driver is built in (i.e. not the power-only profile). */
 bool rw_hid_available(void);

@@ -1,5 +1,9 @@
 #include "power_btn.h"
 
+#include "sdkconfig.h"
+
+#if CONFIG_RW_PWR_ENABLED
+
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include "esp_system.h"
@@ -95,3 +99,18 @@ bool rw_power_busy(void)
 {
     return s_busy;
 }
+
+#else
+esp_err_t rw_power_btn_init(void) { return ESP_OK; }
+esp_err_t rw_power_tap(uint32_t ms)
+{
+    (void)ms;
+    return ESP_ERR_NOT_SUPPORTED;
+}
+esp_err_t rw_power_hold(uint32_t ms)
+{
+    (void)ms;
+    return ESP_ERR_NOT_SUPPORTED;
+}
+bool rw_power_busy(void) { return false; }
+#endif
