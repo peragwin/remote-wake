@@ -112,10 +112,10 @@ export async function run(device, act, args = {}, opts = {}) {
   const response = await sendCommand(device, envelope);
 
   // The device is ahead of us (restored backup, reinstalled app): catch up so
-  // the next command is accepted instead of failing the same way.
+  // the next command is accepted instead of failing the same way. The reply is
+  // unsigned (it comes through the relay), so bumpCounterTo bounds the jump.
   if (response?.ok === false && response.err === 'replay') {
-    const deviceCtr = Number(response.res?.lastCtr);
-    if (Number.isFinite(deviceCtr)) await bumpCounterTo(ctrKey, deviceCtr);
+    await bumpCounterTo(ctrKey, response.res?.lastCtr);
   }
 
   return { ...response, envelope };

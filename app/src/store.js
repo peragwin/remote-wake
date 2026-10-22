@@ -121,13 +121,36 @@ export async function peekCounter(kid) {
   return (await get('counters', kid))?.ctr ?? 0;
 }
 
+/** Largest forward jump a `replay` reply may cause, and the absolute ceiling. */
+export const COUNTER_MAX_JUMP = 1_000_000;
+export const COUNTER_CEILING = 2 ** 52;
+
+/**
+ * Whether a device-reported high-water mark may move the local counter from
+ * @p cur. The value arrives in an unsigned relay reply, so a hostile relay
+ * could otherwise push the counter to (or past) Number.MAX_SAFE_INTEGER and
+ * leave this phone unable to sign another accepted command. Only a safe
+ * integer, below 2^52, ahead of @p cur by at most COUNTER_MAX_JUMP counts.
+ */
+export function acceptFastForward(cur, value) {
+  return (
+    Number.isSafeInteger(value) &&
+    value < COUNTER_CEILING &&
+    value > cur &&
+    value - cur <= COUNTER_MAX_JUMP
+  );
+}
+
 /**
  * Jump the counter forward — used when the device reports `replay`, meaning its
  * high-water mark is ahead of ours (e.g. after restoring the app from a backup).
+ * Anything acceptFastForward rejects is ignored. @returns {Promise<boolean>}
  */
 export async function bumpCounterTo(kid, value) {
   const cur = await peekCounter(kid);
-  if (value > cur) await put('counters', { kid, ctr: value });
+  if (!acceptFastForward(cur, value)) return false;
+  await put('counters', { kid, ctr: value });
+  return true;
 }
 
 /* -------------------------------------------------------------- settings */
