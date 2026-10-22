@@ -20,7 +20,12 @@ typedef enum {
     FAIL_THEN_GOT_IP,
     NETIF_DOWN_CACHED_IP,
     BRIEF_OUTAGE,
+    LONG_FAIL_THEN_IP,
 } scenario_t;
+
+/* LONG_FAIL_THEN_IP: every connect fails synchronously until the network
+ * returns, an hour in (six times the removed ten-minute reboot deadline). */
+#define NETWORK_RETURNS_MS 3600000u
 
 static scenario_t scenario;
 static uint64_t clock_ms, finish_ms;
@@ -30,7 +35,7 @@ static bool relay_online, old_session_valid, session_started;
 static uint32_t address;
 static unsigned connects, starts, stops, disconnects, up_notifications,
                 down_notifications, notifications;
-static uint64_t connect_at[1024];
+static uint64_t connect_at[1024], start_at[1024];
 /* Any driver start/connect call; the largest gap bounds how long recovery
  * can go quiet during an outage. */
 static uint64_t last_attempt_ms, max_attempt_gap_ms;
@@ -147,7 +152,8 @@ esp_err_t esp_wifi_stop(void)
 esp_err_t esp_wifi_start(void)
 {
     assert(!in_callback && wdt_registered);
-    starts++;
+    assert(starts < sizeof(start_at) / sizeof(start_at[0]));
+    start_at[starts++] = clock_ms;
     note_attempt();
     if (scenario == START_FAIL) return ESP_FAIL;
     driver_up = true;
@@ -160,6 +166,12 @@ esp_err_t esp_wifi_connect(void)
     assert(connects < sizeof(connect_at) / sizeof(connect_at[0]));
     connect_at[connects++] = clock_ms;
     note_attempt();
+    if (scenario == LONG_FAIL_THEN_IP) {
+        if (clock_ms < NETWORK_RETURNS_MS) return ESP_FAIL;
+        associated = netif_up = true;
+        address = 1;
+        return ESP_OK;
+    }
     if (scenario == CONNECT_FAIL || scenario == STOP_FAIL || scenario == FAIL_THEN_GOT_IP) return ESP_FAIL;
     if (scenario == DHCP_STALL) associated = netif_up = true;
     if (scenario == NETIF_DOWN_CACHED_IP) {
@@ -250,18 +262,47 @@ static void assert_still_retrying(void)
     assert(finish_ms - last_attempt_ms <= MAX_RETRY_GAP_MS);
 }
 
+/* The stated retry-delay cap, and the removed reboot deadline. */
+#define RETRY_CAP_MS 10000u
+#define OLD_REBOOT_MS 600000u
+
+/* Long after the ramp, attempts still never come faster than the capped
+ * delay: recovery does not saturate into a tight connect/start loop. */
+static void assert_not_saturating(const uint64_t *at, unsigned n)
+{
+    unsigned checked = 0;
+    for (unsigned i = 1; i < n; i++) {
+        if (at[i - 1] < OLD_REBOOT_MS) continue;
+        if (at[i] - at[i - 1] < RETRY_CAP_MS) {
+            fprintf(stderr, "attempts %u and %u only %llu ms apart\n", i - 1, i,
+                    (unsigned long long)(at[i] - at[i - 1]));
+            assert(false);
+        }
+        checked++;
+    }
+    assert(checked > 0);
+}
+
+/* A driver bounce on every sixth attempt: neither dropped nor on every try. */
+static void assert_bounce_every_sixth(unsigned attempts)
+{
+    assert(stops + 1 >= attempts / 6 && stops <= attempts / 6 + 1);
+}
+
 int main(void)
 {
     /* Persistent outages never reboot: connects keep coming at a bounded
      * interval and the driver keeps bouncing long after the old deadline. */
     run(NO_EVENTS, LONG_OUTAGE_MS);
-    assert(connects >= MIN_LONG_ATTEMPTS && stops >= connects / 6 - 1);
+    assert(connects >= MIN_LONG_ATTEMPTS);
+    assert_bounce_every_sixth(connects);
     assert(connect_at[0] == 0 && connect_at[1] >= 31000);
     assert(up_notifications == 0);
     assert_still_retrying();
 
     run(DHCP_STALL, LONG_OUTAGE_MS);
-    assert(connects >= MIN_LONG_ATTEMPTS && stops >= connects / 6 - 1);
+    assert(connects >= MIN_LONG_ATTEMPTS);
+    assert_bounce_every_sixth(connects);
     assert(up_notifications == 0);
     assert_still_retrying();
 
@@ -285,16 +326,21 @@ int main(void)
     assert(connects >= 3 && disconnects > 0);
     assert(up_notifications == 2 && down_notifications >= 1 && relay_online);
 
+    /* Synchronous failures leave only the retry delay as throttle. */
     run(CONNECT_FAIL, LONG_OUTAGE_MS);
-    assert(connects >= MIN_LONG_ATTEMPTS && stops >= connects / 6 - 1);
+    assert(connects >= MIN_LONG_ATTEMPTS);
+    assert_bounce_every_sixth(connects);
     assert_still_retrying();
+    assert_not_saturating(connect_at, connects);
 
     run(START_FAIL, LONG_OUTAGE_MS);
     assert(starts >= MIN_LONG_ATTEMPTS && connects == 0);
     assert_still_retrying();
+    assert_not_saturating(start_at, starts);
 
     run(STOP_FAIL, LONG_OUTAGE_MS);
-    assert(connects >= MIN_LONG_ATTEMPTS && stops >= connects / 6 - 1);
+    assert(connects >= MIN_LONG_ATTEMPTS);
+    assert_bounce_every_sixth(connects);
     assert_still_retrying();
 
     run(ADDRESS_CHANGE, 20000);
@@ -306,10 +352,19 @@ int main(void)
     assert(up_notifications == 1 && down_notifications == 0);
 
     run(NETIF_DOWN_CACHED_IP, LONG_OUTAGE_MS);
-    assert(connects >= MIN_LONG_ATTEMPTS && stops >= connects / 6 - 1);
+    assert(connects >= MIN_LONG_ATTEMPTS);
+    assert_bounce_every_sixth(connects);
     assert(up_notifications == 0);
     assert_still_retrying();
 
-    puts("Wi-Fi recovery: 12 production adapter/policy scenarios passed");
+    /* After an hour of failures the device still comes back by itself, at
+     * the next capped retry, and then stays online without further attempts. */
+    run(LONG_FAIL_THEN_IP, NETWORK_RETURNS_MS + 120000);
+    assert(up_notifications == 1 && relay_online);
+    assert(connect_at[connects - 1] >= NETWORK_RETURNS_MS);
+    assert(connect_at[connects - 1] <= NETWORK_RETURNS_MS + RETRY_CAP_MS + 2000);
+    assert(connects >= 2 && connect_at[connects - 2] < NETWORK_RETURNS_MS);
+
+    puts("Wi-Fi recovery: 13 production adapter/policy scenarios passed");
     return 0;
 }

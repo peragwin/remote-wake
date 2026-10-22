@@ -14,6 +14,12 @@ static int mock_stop_calls;
 static int mock_destroy_calls;
 static int mock_init_calls;
 static int64_t mock_last_init;
+/* Delay between a client's teardown and the next client: the backoff wait. */
+static int64_t mock_last_stop;
+static int64_t mock_waits[128], mock_wait_end[128];
+static unsigned mock_n_waits;
+static bool mock_random_varies;
+static uint32_t mock_random_state;
 static int mock_wdt_feeds;
 static int mock_restarts;
 static int mock_actions;
@@ -73,7 +79,10 @@ static void reset(void)
     mock_stop_at = 0;
     mock_send = INT_MAX;
     mock_send_calls = mock_stop_calls = mock_destroy_calls = mock_init_calls = 0;
-    mock_last_init = 0;
+    mock_last_init = mock_last_stop = 0;
+    mock_n_waits = 0;
+    mock_random_varies = false;
+    mock_random_state = 1;
     mock_wdt_feeds = mock_restarts = mock_actions = mock_verify_calls = 0;
     mock_wdt_add_result = ESP_OK;
     mock_ota_enabled=false;mock_ota_offers=0;mock_sent[0]=mock_ota_url[0]=0;
@@ -207,6 +216,44 @@ static void test_sends_and_dispatch_race(void)
     handle_envelope("{}", 2, session);
     assert(mock_verify_calls == 1 && mock_actions == 0);
     assert(!session_valid(session));
+}
+
+/* An hour-long outage with a relay that never answers: the reconnect wait
+ * ramps up and then holds around its 60 s cap with jitter. It never stays
+ * small (hammering the relay) and never grows without bound. The bounds
+ * below allow any jitter up to +/-50 % so they pin only the stated cap. */
+static void test_outage_backoff_is_capped_with_jitter(void)
+{
+    reset();
+    mock_auto_connect = false;
+    mock_random_varies = true;
+    const int64_t start = mock_now;
+    mock_stop_at = start + 60LL * 60 * 1000000;
+    if (setjmp(mock_exit) == 0) {
+        relay_task(NULL);
+        assert(false);
+    }
+    teardown_client();
+    assert(mock_restarts == 0);
+    assert(mock_n_waits > 20);
+
+    /* From the removed 15-minute deadline on, every wait sits at the cap. */
+    const int64_t cap = 60000000, lo = cap / 2, hi = cap + cap / 2;
+    int64_t min_wait = INT64_MAX, max_wait = 0;
+    unsigned steady = 0;
+    for (unsigned i = 0; i < mock_n_waits; i++) {
+        if (mock_wait_end[i] - start < 15LL * 60 * 1000000) { continue; }
+        if (mock_waits[i] < lo || mock_waits[i] > hi) {
+            fprintf(stderr, "steady reconnect wait %u = %lld us\n", i, (long long)mock_waits[i]);
+            assert(false);
+        }
+        min_wait = mock_waits[i] < min_wait ? mock_waits[i] : min_wait;
+        max_wait = mock_waits[i] > max_wait ? mock_waits[i] : max_wait;
+        steady++;
+    }
+    assert(steady > 10);
+    assert(max_wait - min_wait >= 1000000);   /* jittered, not a fixed period */
+    assert(mock_waits[0] < min_wait / 4);     /* it ramped up to get there */
 }
 
 static void test_task_recovery(void)
@@ -380,6 +427,7 @@ int main(void)
     test_session_fence();
     test_sends_and_dispatch_race();
     test_task_recovery();
+    test_outage_backoff_is_capped_with_jitter();
     test_queue_loss_before_dispatch();
 #endif
     drain_queue();
@@ -393,7 +441,12 @@ int main(void)
 const char *esp_err_to_name(esp_err_t e) { (void)e; return "mock"; }
 int64_t esp_timer_get_time(void) { return mock_now; }
 void esp_restart(void) { ++mock_restarts; longjmp(mock_exit, 1); }
-uint32_t esp_random(void) { return 0; }
+uint32_t esp_random(void)
+{
+    if (!mock_random_varies) { return 0; }
+    mock_random_state = mock_random_state * 1664525u + 1013904223u;
+    return mock_random_state;
+}
 esp_err_t esp_task_wdt_add(void *task)
 {
     mock_subscribed = mock_wdt_add_result == ESP_OK;
@@ -445,6 +498,10 @@ esp_websocket_client_handle_t esp_websocket_client_init(const esp_websocket_clie
     assert(cfg->network_timeout_ms == 10000);
     ++mock_init_calls;
     mock_last_init = mock_now;
+    if (mock_last_stop && mock_n_waits < sizeof(mock_waits) / sizeof(mock_waits[0])) {
+        mock_wait_end[mock_n_waits] = mock_now;
+        mock_waits[mock_n_waits++] = mock_now - mock_last_stop;
+    }
     return &mock_client;
 }
 esp_err_t esp_websocket_register_events(esp_websocket_client_handle_t client, int event,
@@ -458,6 +515,7 @@ esp_err_t esp_websocket_client_start(esp_websocket_client_handle_t client)
 esp_err_t esp_websocket_client_stop(esp_websocket_client_handle_t client)
 {
     ++mock_stop_calls;
+    mock_last_stop = mock_now;
     assert(s_link.session == 0); /* callback fence precedes transport teardown */
     if (mock_stall_stop) { watchdog_stall(); }
     return ESP_OK;
