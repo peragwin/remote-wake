@@ -10,8 +10,8 @@ idf.py build
 idf.py -p /dev/ttyUSB0 flash monitor   # UART port, not the OTG port
 ```
 
-Managed components (`main/idf_component.yml`) are fetched automatically on the
-first build: `espressif/libsodium`, `espressif/esp_websocket_client`,
+Managed components (`../components/remote_wake/idf_component.yml`) are fetched
+automatically on the first build: `espressif/libsodium`, `espressif/esp_websocket_client`,
 `espressif/esp_tinyusb`, `espressif/led_strip`, `espressif/qrcode`.
 
 Power-button-only profile (classic ESP32 / C3): `idf.py set-target esp32`
@@ -21,7 +21,20 @@ profile `wake` / `type` / `keys` are still *known* actions but answer
 `usb_down`; `ping`, `status`, `power_tap` and `power_hold` work normally.
 Per-target seeds live in `sdkconfig.defaults.esp32s3` / `.esp32` / `.esp32c3`.
 
+## Embedding
+
+Other ESP-IDF applications can require the `remote_wake` component without
+linking this project's `app_main`. See [embedding.md](../docs/embedding.md) for
+the import, initialization ownership and current USB limits. This standalone
+application retains its boot flow, pins, provisioning and signed protocol.
+
 ## Layout
+
+`../components/remote_wake` owns the shared source registration, dependency
+manifest and Kconfig menu. Sources remain under `main/` so existing host and
+device test projects use the same implementation. `main/CMakeLists.txt` only
+registers the standalone `main.c` entry point and its component dependency.
+
 - `main/config.*` — NVS settings, deviceId/deviceToken, 4 operator key slots
   (`p1`…`p4`) and their counter high-water marks
 - `main/auth.*` — signing string, canonical-JSON args, Ed25519 verify,
