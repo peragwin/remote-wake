@@ -19,6 +19,18 @@ menu "remote-wake"
             "usb_down". This is auto-selected on targets whose SoC has no
             USB-OTG device peripheral (classic ESP32, ESP32-C3, ...).
 
+    config RW_ACT_KEYBOARD_INPUT
+        bool "Allow remote typing and key sequences (type, keys)"
+        default n
+        help
+            Accept the protocol v1 `type` and `keys` actions, which let any
+            paired phone type text and press arbitrary key chords on the host.
+            Off by default: the device then answers both with "unknown_act"
+            (after the command's counter is persisted, like any disabled
+            action) and their HID handlers are not compiled. `wake`,
+            `power_tap`, `power_hold`, `ping` and `status` are unaffected.
+            Builds before this option always accepted type and keys.
+
     config RW_PWR_ENABLED
         bool "Physical PWR_SW output"
         default y

@@ -23,6 +23,9 @@ const char *esp_err_to_name(esp_err_t err);
 #define CONFIG_RW_AUTH_FAIL_THRESHOLD 3
 #define CONFIG_RW_AUTH_LOCKOUT_SEC 60
 #define CONFIG_RW_TS_WINDOW_SEC 90
+#ifndef CONFIG_RW_ACT_KEYBOARD_INPUT
+#define CONFIG_RW_ACT_KEYBOARD_INPUT 0 /* Kconfig default; run.sh builds both */
+#endif
 
 #define ESP_LOGI(...) ((void)0)
 #define ESP_LOGW(...) ((void)0)
@@ -118,5 +121,6 @@ void cJSON_AddNumberToObject(cJSON *item, const char *name, double value);
 void cJSON_AddStringToObject(cJSON *item, const char *name, const char *value);
 void cJSON_AddBoolToObject(cJSON *item, const char *name, bool value);
 void cJSON_AddItemToObject(cJSON *item, const char *name, cJSON *value);
+cJSON *cJSON_CreateStringArray(const char *const *strings, int count);
 
 #endif

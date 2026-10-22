@@ -19,6 +19,9 @@ typedef int esp_err_t;
 #ifndef CONFIG_RW_PROFILE_POWER_ONLY
 #define CONFIG_RW_PROFILE_POWER_ONLY 0
 #endif
+#ifndef CONFIG_RW_ACT_KEYBOARD_INPUT
+#define CONFIG_RW_ACT_KEYBOARD_INPUT 1 /* the fault-injection suite drives type/keys */
+#endif
 const char *esp_err_to_name(esp_err_t err);
 int64_t esp_timer_get_time(void);
 size_t strlcpy(char *dst, const char *src, size_t size);

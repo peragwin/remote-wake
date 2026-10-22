@@ -231,16 +231,28 @@ static esp_err_t ops_set_ctr(void *ctx, const char *kid, uint64_t ctr)
     return rw_config_set_ctr(kid, ctr);
 }
 
+/* Every action this build accepts, in the order `status` reports them as
+ * "acts". wake is known even without USB: it exists but fails with usb_down,
+ * which is a more useful answer than unknown_act. type/keys are build-gated
+ * (CONFIG_RW_ACT_KEYBOARD_INPUT); without it they are unknown_act. */
+static const char *const s_acts[] = {
+    "ping", "status", "wake",
+#if CONFIG_RW_ACT_KEYBOARD_INPUT
+    "type", "keys",
+#endif
+    "power_tap", "power_hold",
+};
+#define N_ACTS ((int)(sizeof(s_acts) / sizeof(s_acts[0])))
+
 static bool ops_act_enabled(void *ctx, const char *act)
 {
     (void)ctx;
-    if (!strcmp(act, "ping") || !strcmp(act, "status") ||
-        !strcmp(act, "power_tap") || !strcmp(act, "power_hold")) {
-        return true;
+    for (int i = 0; i < N_ACTS; i++) {
+        if (!strcmp(act, s_acts[i])) {
+            return true;
+        }
     }
-    /* wake/type/keys are known actions even without USB — they exist but fail
-     * with usb_down, which is a more useful answer than unknown_act. */
-    return !strcmp(act, "wake") || !strcmp(act, "type") || !strcmp(act, "keys");
+    return false;
 }
 
 /* ------------------------------------------------------------ responses -- */
@@ -382,6 +394,7 @@ static void dispatch(const rw_cmd_t *cmd)
         cJSON_AddStringToObject(res, "usb", usb_state_str());
         cJSON_AddStringToObject(res, "pc_power", rw_pc_power_name(rw_pc_sense_get()));
         cJSON_AddNumberToObject(res, "uptime", (double)uptime_seconds());
+        cJSON_AddItemToObject(res, "acts", cJSON_CreateStringArray(s_acts, N_ACTS));
         respond_ok(cmd->id, res);
         return;
     }
@@ -397,6 +410,7 @@ static void dispatch(const rw_cmd_t *cmd)
         return;
     }
 
+#if CONFIG_RW_ACT_KEYBOARD_INPUT
     if (!strcmp(cmd->act, "type")) {
         const cJSON *t = cJSON_GetObjectItemCaseSensitive(cmd->args, "text");
         const cJSON *en = cJSON_GetObjectItemCaseSensitive(cmd->args, "enter");
@@ -430,6 +444,7 @@ static void dispatch(const rw_cmd_t *cmd)
         }
         return;
     }
+#endif /* CONFIG_RW_ACT_KEYBOARD_INPUT */
 
     if (!strcmp(cmd->act, "power_tap") || !strcmp(cmd->act, "power_hold")) {
         bool hold = cmd->act[6] == 'h';

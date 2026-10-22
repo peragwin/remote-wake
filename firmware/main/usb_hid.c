@@ -30,6 +30,7 @@ bool rw_hid_available(void) { return false; }
 bool rw_hid_mounted(void)   { return false; }
 bool rw_hid_suspended(void) { return false; }
 esp_err_t rw_hid_wake(void) { return ESP_ERR_NOT_SUPPORTED; }
+#if CONFIG_RW_ACT_KEYBOARD_INPUT
 esp_err_t rw_hid_type(const char *text, bool enter)
 {
     (void)text; (void)enter;
@@ -40,6 +41,7 @@ esp_err_t rw_hid_keys(const cJSON *seq)
     (void)seq;
     return ESP_ERR_NOT_SUPPORTED;
 }
+#endif
 
 #else /* full profile ------------------------------------------------------ */
 
@@ -590,6 +592,8 @@ esp_err_t rw_hid_wake(void)
     return finish_action(err);
 }
 
+#if CONFIG_RW_ACT_KEYBOARD_INPUT /* type / keys: build-gated, see Kconfig */
+
 /* US-layout ASCII -> {shift, keycode}, straight from TinyUSB. */
 static const uint8_t s_ascii2kc[128][2] = {HID_ASCII_TO_KEYCODE};
 
@@ -800,5 +804,7 @@ esp_err_t rw_hid_keys(const cJSON *seq)
 
     return finish_action(err);
 }
+
+#endif /* CONFIG_RW_ACT_KEYBOARD_INPUT */
 
 #endif /* CONFIG_RW_PROFILE_POWER_ONLY */

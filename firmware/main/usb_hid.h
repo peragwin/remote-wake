@@ -60,6 +60,10 @@ bool rw_hid_suspended(void);
  */
 esp_err_t rw_hid_wake(void);
 
+/* rw_hid_type / rw_hid_keys are defined only when
+ * CONFIG_RW_ACT_KEYBOARD_INPUT is set (off by default); calling them from a
+ * build without it is a link error. */
+
 /**
  * Type @p text (US layout, incl. shifted ASCII) and optionally press Enter.
  * Rejects input longer than RW_TYPE_MAX_CHARS or containing characters with

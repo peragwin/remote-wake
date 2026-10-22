@@ -360,7 +360,82 @@ static void test_disabled_power_dispatch(void)
     mock_power_result = ESP_OK;
 }
 
+/* The gate is the auth layer's "known and enabled" check (step 6, after the
+ * counter is persisted); auth's own suite covers that ordering. */
+static void test_act_gate(void)
+{
+    const char *always[] = {"ping", "status", "wake", "power_tap", "power_hold"};
+    for (unsigned i = 0; i < sizeof(always) / sizeof(always[0]); i++) {
+        assert(ops_act_enabled(NULL, always[i]));
+    }
+    assert(ops_act_enabled(NULL, "type") == (bool)CONFIG_RW_ACT_KEYBOARD_INPUT);
+    assert(ops_act_enabled(NULL, "keys") == (bool)CONFIG_RW_ACT_KEYBOARD_INPUT);
+    assert(!ops_act_enabled(NULL, "") && !ops_act_enabled(NULL, "Type"));
+    assert(!ops_act_enabled(NULL, "power") && !ops_act_enabled(NULL, "keys "));
+}
+
 #ifdef RW_RELAY_REAL_JSON
+static cJSON *dispatch_json(const char *act, const char *args)
+{
+    rw_cmd_t cmd = {0};
+    strcpy(cmd.id, "c1");
+    strcpy(cmd.act, act);
+    cJSON *parsed = cJSON_Parse(args);
+    cmd.args = parsed;
+    mock_sent[0] = 0;
+    dispatch(&cmd);
+    cJSON_Delete(parsed);
+    cJSON *reply = cJSON_Parse(mock_sent);
+    assert(reply);
+    return reply;
+}
+
+static void test_status_reports_acts(void)
+{
+    reset();
+    connect();
+    cJSON *reply = dispatch_json("status", "{}");
+    const cJSON *res = cJSON_GetObjectItemCaseSensitive(reply, "res");
+    const cJSON *acts = cJSON_GetObjectItemCaseSensitive(res, "acts");
+    assert(cJSON_IsArray(acts));
+    const char *expect[] = {"ping", "status", "wake",
+#if CONFIG_RW_ACT_KEYBOARD_INPUT
+                            "type", "keys",
+#endif
+                            "power_tap", "power_hold"};
+    int n = (int)(sizeof(expect) / sizeof(expect[0]));
+    assert(cJSON_GetArraySize(acts) == n);
+    for (int i = 0; i < n; i++) {
+        const cJSON *a = cJSON_GetArrayItem(acts, i);
+        assert(cJSON_IsString(a) && !strcmp(a->valuestring, expect[i]));
+        assert(ops_act_enabled(NULL, a->valuestring)); /* reported == accepted */
+    }
+    assert(cJSON_GetObjectItemCaseSensitive(res, "fw"));
+    assert(cJSON_GetObjectItemCaseSensitive(res, "usb"));
+    cJSON_Delete(reply);
+}
+
+static void test_keyboard_dispatch_gate(void)
+{
+    reset();
+    connect();
+    const char *acts[] = {"type", "keys"};
+    const char *args[] = {"{\"text\":\"a\",\"enter\":true}", "{\"seq\":[[\"ENTER\"]]}"};
+    for (int i = 0; i < 2; i++) {
+        mock_actions = 0;
+        cJSON *reply = dispatch_json(acts[i], args[i]);
+        const cJSON *ok = cJSON_GetObjectItemCaseSensitive(reply, "ok");
+        const cJSON *err = cJSON_GetObjectItemCaseSensitive(reply, "err");
+#if CONFIG_RW_ACT_KEYBOARD_INPUT
+        assert(cJSON_IsTrue(ok) && !err && mock_actions == 1);
+#else
+        assert(cJSON_IsFalse(ok) && mock_actions == 0);
+        assert(cJSON_IsString(err) && !strcmp(err->valuestring, "unknown_act"));
+#endif
+        cJSON_Delete(reply);
+    }
+}
+
 static void test_update_metadata(void)
 {
     reset();uint32_t session=connect();
@@ -439,9 +514,12 @@ int main(void)
 {
     s_rx_queue = &mock_queue;
     test_clock_sync();
+    test_act_gate();
 #ifdef RW_RELAY_REAL_JSON
     test_update_metadata();
     test_status_reports_pc_power();
+    test_status_reports_acts();
+    test_keyboard_dispatch_gate();
 #else
     test_disabled_power_dispatch();
     test_fragmentation();
@@ -454,7 +532,8 @@ int main(void)
 #endif
     drain_queue();
     free(s_asm);
-    puts("relay host tests passed");
+    printf("relay host tests passed (keyboard input %s)\n",
+           CONFIG_RW_ACT_KEYBOARD_INPUT ? "on" : "off");
     return 0;
 }
 
@@ -575,6 +654,7 @@ void cJSON_AddStringToObject(cJSON *item, const char *name, const char *value)
 { if (!strcmp(name, "err")) snprintf(mock_error, sizeof(mock_error), "%s", value); }
 void cJSON_AddBoolToObject(cJSON *item, const char *name, bool value) { }
 void cJSON_AddItemToObject(cJSON *item, const char *name, cJSON *value) { free(value); }
+cJSON *cJSON_CreateStringArray(const char *const *strings, int count) { return cJSON_CreateObject(); }
 #endif
 bool rw_config_get_key(const char *kid, uint8_t out[32]) { return true; }
 bool rw_config_get_ctr(const char *kid, uint64_t *out) { *out = 0; return true; }
