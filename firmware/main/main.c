@@ -24,6 +24,7 @@
 #include "freertos/task.h"
 #include "led.h"
 #include "nvs_flash.h"
+#include "pc_sense.h"
 #include "power_btn.h"
 #include "provisioning.h"
 #include "relay_client.h"
@@ -118,6 +119,8 @@ void app_main(void)
 {
     /* 1. The power pin must be defined before anything else can fault. */
     ESP_ERROR_CHECK(rw_power_btn_init());
+    /* Host power-LED sense: best effort; a failure only reports "unknown". */
+    (void)rw_pc_sense_init();
 
     /* 2. Status LED — best effort, never fatal. */
     rw_led_init();

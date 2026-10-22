@@ -35,6 +35,34 @@ menu "remote-wake"
             Drives the LED side of the PC817 through a 330 ohm resistor.
             Active high, idle low. See hardware/README.md.
 
+    config RW_PC_SENSE_ENABLED
+        bool "Host power-LED sense input"
+        default n
+        help
+            Read the motherboard's PWR_LED header through an optocoupler and
+            report the host as on, off or sleep (blinking LED) in the status
+            response's "pc_power" field. Disabled, no GPIO is touched and the
+            field reads "unknown". Sensing never gates power or HID actions.
+
+    config RW_PC_SENSE_GPIO
+        int "Power-LED sense GPIO"
+        depends on RW_PC_SENSE_ENABLED
+        range 0 48
+        default 6
+        help
+            Input from the sense optocoupler's transistor. Must differ from
+            the PWR_SW, setup-button and status-LED GPIOs.
+
+    config RW_PC_SENSE_ACTIVE_LOW
+        bool "Sense input is low while the host LED is lit"
+        depends on RW_PC_SENSE_ENABLED
+        default y
+        help
+            Yes for the reference circuit: the opto transistor pulls the
+            input to GND while lit, against the internal pull-up. No for a
+            circuit that drives the input high while lit; the internal
+            pull-down is used instead.
+
     config RW_BOOT_GPIO
         int "Setup / factory-reset button GPIO"
         range 0 48

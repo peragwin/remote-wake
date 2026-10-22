@@ -10,6 +10,8 @@ set(RW_SRCS
     "canon_json.c"
     "b64url.c"
     "power_btn.c"
+    "pc_power.c"
+    "pc_sense.c"
     "relay_client.c"
     "provisioning.c"
     "captive_dns.c"
