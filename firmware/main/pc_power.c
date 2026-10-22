@@ -38,7 +38,9 @@ rw_pc_power_t rw_pc_classifier_step(rw_pc_classifier_t *c, bool lit, uint64_t no
         }
     }
 
-    if (now_ms - c->last_edge_ms >= RW_PC_STEADY_MS) {
+    /* Wait out a pending raw change before calling the level steady: it may
+     * be the next edge of a slow blink, dated before the steady boundary. */
+    if (c->candidate == c->level && now_ms - c->last_edge_ms >= RW_PC_STEADY_MS) {
         c->run   = 0;
         c->state = c->level ? RW_PC_ON : RW_PC_OFF;
     } else if (c->run >= RW_PC_BLINK_EDGES) {
