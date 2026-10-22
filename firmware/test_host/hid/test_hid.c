@@ -364,6 +364,31 @@ static void test_disconnect_resume_and_ownership(void)
     mutex.held = false;
 }
 
+static void test_maintenance_quiesce(void)
+{
+    reset();
+    mutex.held = true;
+    assert(rw_hid_quiesce() == ESP_ERR_INVALID_STATE && nsubmit == 0);
+    mutex.held = false;
+    held_report[3] = HID_KEY_A;
+    assert(rw_hid_quiesce() == ESP_OK);
+    assert(neutral(held_report));
+    int before = nsubmit;
+    assert(rw_hid_type("a", false) == ESP_ERR_INVALID_STATE);
+    assert(rw_hid_wake() == ESP_ERR_INVALID_STATE);
+    recovery_once();
+    assert(nsubmit == before);
+    assert(rw_hid_quiesce() == ESP_ERR_INVALID_STATE);
+    rw_hid_resume_actions();
+    assert(rw_hid_type("a", false) == ESP_OK);
+    reset(); suspended = true;
+    assert(rw_hid_quiesce() == ESP_OK && nsubmit == 0);
+    rw_hid_resume_actions();
+    reset(); stall_transfer_at = 1;
+    assert(rw_hid_quiesce() == ESP_ERR_TIMEOUT && !s_quiesced);
+    assert(now_us <= 300000);
+}
+
 int main(void)
 {
     test_init();
@@ -373,5 +398,6 @@ int main(void)
     test_failed_release();
     test_stalls_and_deadlines();
     test_disconnect_resume_and_ownership();
+    test_maintenance_quiesce();
     printf("HID production-C fault injection passed at %d Hz\n", CONFIG_FREERTOS_HZ);
 }

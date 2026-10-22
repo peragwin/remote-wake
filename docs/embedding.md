@@ -126,6 +126,47 @@ functions succeed, the report descriptor is NULL with length zero, and HID
 commands return protocol `usb_down`. USB Serial/JTAG is a separate peripheral
 where supported.
 
+## Optional ROM download maintenance
+
+Applications may expose their own local maintenance command using
+`maintenance.h`. `rw_maintenance_bootloader_supported()` currently reports
+support only on ESP32-S3 with ESP-IDF 5.4.x, the default TinyUSB task and existing
+eFuses that permit USB Serial/JTAG ROM download with the internal PHY. Other
+targets/SDK versions return false and requests return `ESP_ERR_NOT_SUPPORTED`.
+This helper does not change any eFuse. Reserve native USB GPIO19/20 for USB;
+external PHY and USB host applications are unsupported.
+
+Call `rw_maintenance_enter_bootloader()` from the application's task, outside
+TinyUSB callbacks. It synchronously reserves the power/HID action locks,
+rejects active actions with `ESP_ERR_INVALID_STATE`, and completes a neutral
+keyboard report on an active bus with the existing bounded transfer deadline.
+It never wakes a sleeping host. New power/HID actions and HID recovery stay
+blocked while maintenance is accepted; rejected requests restore normal
+operation and leave USB attached. No services may be initialized afterward.
+
+`ESP_OK` means a reboot task was admitted. Only then send the application's
+success acknowledgement. Flush it during `RW_MAINTENANCE_ACK_GRACE_MS` (500 ms),
+then stop all application USB reads/writes before that grace expires. All
+composite class owners must honor this boundary. Allocation, shutdown-handler
+registration, busy and neutral-transfer errors are returned before acceptance.
+The worker detaches and uninstalls TinyUSB, returns the internal PHY to hardware
+USB Serial/JTAG, allows a bounded host bus-reset interval, clears USB persistence
+flags, and sets volatile forced ROM download at shutdown before restarting.
+If TinyUSB teardown fails, it restarts normally rather than changing PHY
+ownership while a USB task may still run.
+
+The handoff follows Espressif's
+[Arduino S3 USB-to-Serial/JTAG and forced-download implementation](https://github.com/espressif/arduino-esp32/blob/master/cores/esp32/esp32-hal-tinyusb.c),
+using the installed IDF's LL APIs and the managed TinyUSB teardown function.
+It is an optional application transport feature: the signed relay protocol and
+its action list remain unchanged. It writes no flash, NVS, partition table or
+OTA boot selection and preserves pairing/replay counters. ROM download can be
+left with an EN reset/power cycle or `esptool --after watchdog_reset`; a regular
+software reset may retain the forced-download state. Flash only the intended
+firmware ranges and retain the NVS partition when updating. This is ROM entry,
+not an OTA updater; OTA partitioning, signed-image policy and rollback remain
+future application work.
+
 ## Validation
 
 The component compiles the same C sources used by the existing host regression

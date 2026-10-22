@@ -38,6 +38,15 @@ esp_err_t rw_hid_init_external(void);
  */
 const uint8_t *rw_hid_report_descriptor(size_t *length);
 
+/** Reserve HID for maintenance, rejecting an active action without waiting.
+ * Completes a neutral report on an active bus (bounded 200 ms), then blocks
+ * actions/recovery until reboot or rw_hid_resume_actions(). Uninitialized HID
+ * is a successful no-op. The caller must not subsequently initialize HID.
+ */
+esp_err_t rw_hid_quiesce(void);
+/** Cancel a successful maintenance reservation before USB teardown only. */
+void rw_hid_resume_actions(void);
+
 /** True when the driver is built in (i.e. not the power-only profile). */
 bool rw_hid_available(void);
 /** True when the USB host has configured us. */

@@ -4,6 +4,7 @@
 
 #if CONFIG_RW_PWR_ENABLED
 
+#include <stdatomic.h>
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include "esp_system.h"
@@ -18,6 +19,7 @@ static const char *TAG = "rw.pwr";
 
 static SemaphoreHandle_t s_lock;
 static volatile bool     s_busy;
+static atomic_bool       s_quiesced;
 
 static void release_pin(void)
 {
@@ -74,6 +76,10 @@ static esp_err_t pulse(uint32_t ms, uint32_t lo, uint32_t hi)
         return ESP_ERR_INVALID_STATE; /* busy */
     }
 
+    if (s_quiesced) {
+        xSemaphoreGive(s_lock);
+        return ESP_ERR_INVALID_STATE;
+    }
     s_busy = true;
     ESP_LOGI(TAG, "PWR_SW high for %u ms", (unsigned)ms);
     gpio_set_level(PWR_GPIO, 1);
@@ -95,6 +101,17 @@ esp_err_t rw_power_hold(uint32_t ms)
     return pulse(ms, RW_HOLD_MS_MIN, RW_HOLD_MS_MAX);
 }
 
+esp_err_t rw_power_btn_quiesce(void)
+{
+    if (!s_lock) return ESP_OK;
+    if (xSemaphoreTake(s_lock, 0) != pdTRUE) return ESP_ERR_INVALID_STATE;
+    esp_err_t err = s_quiesced ? ESP_ERR_INVALID_STATE : ESP_OK;
+    if (err == ESP_OK) s_quiesced = true;
+    xSemaphoreGive(s_lock);
+    return err;
+}
+void rw_power_btn_resume_actions(void) { s_quiesced = false; }
+
 bool rw_power_busy(void)
 {
     return s_busy;
@@ -112,5 +129,7 @@ esp_err_t rw_power_hold(uint32_t ms)
     (void)ms;
     return ESP_ERR_NOT_SUPPORTED;
 }
+esp_err_t rw_power_btn_quiesce(void) { return ESP_OK; }
+void rw_power_btn_resume_actions(void) {}
 bool rw_power_busy(void) { return false; }
 #endif

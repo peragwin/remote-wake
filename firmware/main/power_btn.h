@@ -36,6 +36,14 @@ esp_err_t rw_power_btn_init(void);
 esp_err_t rw_power_tap(uint32_t ms);
 esp_err_t rw_power_hold(uint32_t ms);
 
+/** Reserve power output for maintenance. Returns INVALID_STATE if a pulse or
+ * reservation is active; blocks new pulses until resume/reboot. Uninitialized
+ * or disabled output is a successful no-op; do not initialize it afterward.
+ */
+esp_err_t rw_power_btn_quiesce(void);
+/** Cancel a maintenance reservation before reboot/USB teardown only. */
+void rw_power_btn_resume_actions(void);
+
 /** True while a pulse is in flight. */
 bool rw_power_busy(void);
 

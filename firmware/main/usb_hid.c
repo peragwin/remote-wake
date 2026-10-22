@@ -24,6 +24,8 @@ const uint8_t *rw_hid_report_descriptor(size_t *length)
     if (length) *length = 0;
     return NULL;
 }
+esp_err_t rw_hid_quiesce(void) { return ESP_OK; }
+void rw_hid_resume_actions(void) {}
 bool rw_hid_available(void) { return false; }
 bool rw_hid_mounted(void)   { return false; }
 bool rw_hid_suspended(void) { return false; }
@@ -128,6 +130,7 @@ void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id,
 /* -------------------------------------------------------------- state --- */
 
 static SemaphoreHandle_t s_lock;
+static atomic_bool       s_quiesced;
 static atomic_bool       s_installed; /* publishes initialized state to worker */
 static TaskHandle_t      s_recovery_task;
 /* Only the action/recovery task holding s_lock may submit reports or change
@@ -455,7 +458,11 @@ static void recovery_once(void)
 {
     static bool was_active;
     static uint32_t observed_epoch;
-    if (!s_installed || xSemaphoreTake(s_lock, 0) != pdTRUE) {
+    if (!s_installed || s_quiesced || xSemaphoreTake(s_lock, 0) != pdTRUE) {
+        return;
+    }
+    if (s_quiesced) {
+        xSemaphoreGive(s_lock);
         return;
     }
     bool active = bus_state() == ESP_OK;
@@ -501,12 +508,39 @@ static esp_err_t lock_action(void)
     /* Budget includes lock contention and resume; reserve bounded cleanup
      * after aborting. A slowly progressing endpoint must not block relay
      * servicing indefinitely or continue typing after its command timed out. */
+    if (s_quiesced) return ESP_ERR_INVALID_STATE;
     const int64_t deadline = esp_timer_get_time() + 8000000;
     if (xSemaphoreTake(s_lock, delay_ticks(2000)) != pdTRUE) {
         return ESP_ERR_INVALID_STATE;
     }
+    if (s_quiesced) {
+        xSemaphoreGive(s_lock);
+        return ESP_ERR_INVALID_STATE;
+    }
     s_action_deadline = deadline;
     return ESP_OK;
+}
+
+esp_err_t rw_hid_quiesce(void)
+{
+    if (!s_installed) return ESP_OK;
+    if (xSemaphoreTake(s_lock, 0) != pdTRUE) return ESP_ERR_INVALID_STATE;
+    if (s_quiesced) {
+        xSemaphoreGive(s_lock);
+        return ESP_ERR_INVALID_STATE;
+    }
+    /* Never wake the host for maintenance. A detached/suspended bus will be
+     * physically disconnected by the maintenance task. Otherwise complete a
+     * neutral report, with the usual bounded transfer deadline. */
+    esp_err_t err = bus_state() == ESP_OK ? release_all() : ESP_OK;
+    if (err == ESP_OK) s_quiesced = true;
+    xSemaphoreGive(s_lock);
+    return err;
+}
+
+void rw_hid_resume_actions(void)
+{
+    s_quiesced = false;
 }
 
 static esp_err_t finish_action(esp_err_t err)

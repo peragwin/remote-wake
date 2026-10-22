@@ -14,6 +14,7 @@ set(RW_SRCS
     "provisioning.c"
     "led.c"
     "usb_hid.c"
+    "maintenance.c"
 )
 
 list(TRANSFORM RW_SRCS PREPEND "${RW_SOURCE_DIR}/")
@@ -31,6 +32,7 @@ set(RW_REQUIRES
     libsodium
     qrcode
     driver
+    efuse
     lwip
 )
 
