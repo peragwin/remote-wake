@@ -5,6 +5,7 @@
 #include <setjmp.h>
 #include <stdio.h>
 #include "../../../main/relay_client.c"
+#include "../../../main/pc_power.c"
 
 static int64_t mock_now = 1000000;
 static int64_t mock_stop_at;
@@ -33,6 +34,7 @@ static rw_ota_registration_t mock_registration = {
     .partition_layout="rw-4m-ab-v1", .version="1.0.0", .release_counter=1, .updater_api=1,
 };
 static bool mock_power_dispatch;
+static rw_pc_power_t mock_pc_power;
 static char mock_error[32];
 static esp_err_t mock_wdt_add_result;
 static bool mock_auto_connect = true;
@@ -403,6 +405,25 @@ static void test_update_metadata(void)
     mock_ota_enabled=true;rw_relay_notify_network(false);rw_relay_notify_network(true);
     assert(handle_update_hint(valid,strlen(valid),session));assert(mock_ota_offers==1);
 }
+
+static void test_status_reports_pc_power(void)
+{
+    reset();(void)connect();
+    const rw_pc_power_t states[]={RW_PC_UNKNOWN,RW_PC_OFF,RW_PC_ON,RW_PC_SLEEP};
+    const char *names[]={"unknown","off","on","sleep"};
+    for(unsigned i=0;i<4;i++){
+        mock_pc_power=states[i];mock_sent[0]=0;
+        rw_cmd_t cmd={0};strcpy(cmd.id,"s");strcpy(cmd.act,"status");
+        dispatch(&cmd);
+        cJSON *root=cJSON_Parse(mock_sent);
+        cJSON *res=cJSON_GetObjectItemCaseSensitive(root,"res");
+        cJSON *pc=cJSON_GetObjectItemCaseSensitive(res,"pc_power");
+        assert(cJSON_IsString(pc) && !strcmp(pc->valuestring,names[i]));
+        assert(mock_actions==0); // reading state never acts
+        cJSON_Delete(root);
+    }
+    mock_pc_power=RW_PC_UNKNOWN;
+}
 #endif
 
 static void test_clock_sync(void)
@@ -420,6 +441,7 @@ int main(void)
     test_clock_sync();
 #ifdef RW_RELAY_REAL_JSON
     test_update_metadata();
+    test_status_reports_pc_power();
 #else
     test_disabled_power_dispatch();
     test_fragmentation();
@@ -581,6 +603,7 @@ esp_err_t rw_hid_type(const char *text, bool enter) { ++mock_actions; return ESP
 esp_err_t rw_hid_keys(const cJSON *seq) { ++mock_actions; return ESP_OK; }
 esp_err_t rw_power_tap(uint32_t ms) { ++mock_actions; return mock_power_result; }
 esp_err_t rw_power_hold(uint32_t ms) { ++mock_actions; return mock_power_result; }
+rw_pc_power_t rw_pc_sense_get(void) { return mock_pc_power; }
 
 /* OTA is disabled unless a test explicitly configures registration. */
 bool rw_ota_get_registration(rw_ota_registration_t *out) { if(!mock_ota_enabled)return false;*out=mock_registration;return true; }

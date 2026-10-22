@@ -22,6 +22,7 @@
 #include "freertos/queue.h"
 #include "freertos/task.h"
 #include "led.h"
+#include "pc_sense.h"
 #include "power_btn.h"
 #include "ota.h"
 #include "sdkconfig.h"
@@ -379,6 +380,7 @@ static void dispatch(const rw_cmd_t *cmd)
         }
         cJSON_AddNumberToObject(res, "rssi", rssi);
         cJSON_AddStringToObject(res, "usb", usb_state_str());
+        cJSON_AddStringToObject(res, "pc_power", rw_pc_power_name(rw_pc_sense_get()));
         cJSON_AddNumberToObject(res, "uptime", (double)uptime_seconds());
         respond_ok(cmd->id, res);
         return;
