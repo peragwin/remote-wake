@@ -9,8 +9,10 @@
  * Endpoints (setup mode ONLY — the server is never started on the home
  * network, so /pair simply does not exist there):
  *   GET  /         setup page
- *   GET  /info     {deviceId, keys, maxKeys, ssid, relayUrl, fw}
- *   POST /config   {ssid, pass, relay}
+ *   GET  /info     {deviceId, keys, maxKeys, ssid, relayUrl, relayOverride,
+ *                   relayDefault, fw}
+ *   POST /config   {ssid, pass, relay?} (relay omitted/empty keeps the stored
+ *                  override; the firmware default clears it)
  *   POST /pair     {pubkey, name} -> {deviceId, deviceToken, relayUrl, kid}
  *   POST /finish   reboot into normal mode
  */

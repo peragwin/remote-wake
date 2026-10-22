@@ -135,8 +135,11 @@ hash and presence.
 1. Fresh device (or BOOT held 5 s) starts SoftAP `remote-wake-<deviceId4>`
    (WPA2, password printed on serial/QR) and serves `http://192.168.4.1`.
 2. Phone joins AP, opens the setup page, which collects: home Wi-Fi
-   credentials, relay URL, and POSTs the phone's Ed25519 public key →
-   `/pair {"pubkey": "<b64url>", "name": "Alex's phone"}`.
+   credentials, an optional relay URL override, and POSTs the phone's Ed25519
+   public key → `/pair {"pubkey": "<b64url>", "name": "Alex's phone"}`.
+   The device stores a relay URL only as an explicit override of its
+   firmware default (`CONFIG_RW_RELAY_URL`); `relayUrl` in every response is
+   the effective URL.
 3. Device replies `{"deviceId": ..., "deviceToken": ..., "relayUrl": ...,
    "kid": "p1"}` (`kid` = the slot the key was stored in),
    which the PWA stores locally; device stores pubkey in slot `p1`

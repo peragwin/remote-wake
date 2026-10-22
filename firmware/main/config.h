@@ -50,9 +50,15 @@ const char *rw_config_device_token(void);  /**< 43 chars, never NULL */
 esp_err_t rw_config_get_wifi(char *ssid, size_t ssid_sz, char *pass, size_t pass_sz);
 esp_err_t rw_config_set_wifi(const char *ssid, const char *pass);
 
-/** Configured base URL, falling back to CONFIG_RW_RELAY_URL. */
+/** Effective base URL: the stored override, else CONFIG_RW_RELAY_URL. */
 esp_err_t rw_config_get_relay_url(char *out, size_t out_sz);
+/** True when NVS holds an explicit relay URL override. */
+bool rw_config_relay_url_is_override(void);
+/** Store an override. The exact compile-time default clears the override
+ *  instead; any other relay.example.com URL is rejected as a placeholder. */
 esp_err_t rw_config_set_relay_url(const char *url);
+/** Remove any override so CONFIG_RW_RELAY_URL applies. */
+esp_err_t rw_config_clear_relay_url(void);
 
 /** Build the full device websocket endpoint: <base>/v1/device/<deviceId>. */
 esp_err_t rw_config_relay_ws_url(char *out, size_t out_sz);

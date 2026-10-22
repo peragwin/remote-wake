@@ -155,7 +155,11 @@ static esp_err_t h_info(httpd_req_t *req)
     cJSON_AddNumberToObject(o, "keys", rw_config_key_count());
     cJSON_AddNumberToObject(o, "maxKeys", RW_MAX_KEY_SLOTS);
     cJSON_AddStringToObject(o, "ssid", ssid);
+    /* relayUrl is the effective URL; the page pre-fills only an override and
+     * shows the firmware default as its placeholder. */
     cJSON_AddStringToObject(o, "relayUrl", relay);
+    cJSON_AddBoolToObject(o, "relayOverride", rw_config_relay_url_is_override());
+    cJSON_AddStringToObject(o, "relayDefault", CONFIG_RW_RELAY_URL);
     cJSON_AddStringToObject(o, "fw", RW_FW_VERSION);
     /* Deliberately NOT the device token: that is only handed out by /pair. */
     return send_json(req, "200 OK", o);
@@ -185,6 +189,7 @@ static esp_err_t h_config(httpd_req_t *req)
     } else {
         err = ESP_ERR_INVALID_ARG;
     }
+    /* Absent or empty keeps the stored override; the default clears it. */
     if (err == ESP_OK && cJSON_IsString(j_relay) && j_relay->valuestring[0]) {
         err = rw_config_set_relay_url(j_relay->valuestring);
     }

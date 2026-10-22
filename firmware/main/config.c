@@ -2,6 +2,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <strings.h>
 #include <time.h>
 
 #include "b64url.h"
@@ -64,6 +65,24 @@ static esp_err_t set_str(const char *key, const char *val)
     return err;
 }
 
+/* Erasing an absent key succeeds: the caller only needs it to be gone. */
+static esp_err_t erase_key(const char *key)
+{
+    nvs_handle_t h;
+    esp_err_t err = nvs_open_rw(&h, NVS_READWRITE);
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = nvs_erase_key(h, key);
+    if (err == ESP_OK) {
+        err = nvs_commit(h);
+    } else if (err == ESP_ERR_NVS_NOT_FOUND) {
+        err = ESP_OK;
+    }
+    nvs_close(h);
+    return err;
+}
+
 /* Slot indices are 0..3; the % 4 keeps gcc's value-range analysis (and thus
  * -Werror=format-truncation) certain the output fits "x1".."x4" + NUL. */
 static void slot_key(int idx, char out[4])
@@ -77,6 +96,30 @@ static void ctr_key(int idx, char out[4])
 }
 
 /* ---------------------------------------------------------------- init -- */
+
+static esp_err_t get_relay_override(char *out, size_t out_sz);
+static bool relay_is_placeholder(const char *url);
+
+/* NVS holds the relay URL only as an explicit override. Older setup pages
+ * saved whatever the field was pre-filled with, so drop the documentation
+ * placeholder (never a real relay) and copies of the current default. */
+static esp_err_t migrate_relay_override(void)
+{
+    char url[RW_RELAY_URL_MAXLEN];
+    if (get_relay_override(url, sizeof(url)) != ESP_OK) {
+        return ESP_OK;
+    }
+    bool placeholder = relay_is_placeholder(url);
+    if (!placeholder && strcmp(url, CONFIG_RW_RELAY_URL) != 0) {
+        return ESP_OK;
+    }
+    esp_err_t err = erase_key(K_RELAY);
+    if (err == ESP_OK) {
+        ESP_LOGW(TAG, "erased stored relay URL %s (%s); using firmware default",
+                 url, placeholder ? "placeholder" : "same as default");
+    }
+    return err;
+}
 
 static esp_err_t ensure_identity(void)
 {
@@ -120,6 +163,11 @@ esp_err_t rw_config_init(void)
     err = ensure_identity();
     if (err != ESP_OK) {
         return err;
+    }
+    err = migrate_relay_override();
+    if (err != ESP_OK) {
+        /* Not fatal: the stale value keeps working exactly as before. */
+        ESP_LOGE(TAG, "relay URL migration: %s", esp_err_to_name(err));
     }
     s_ready = true;
     ESP_LOGI(TAG, "deviceId=%s keys=%d provisioned=%d", s_device_id,
@@ -176,13 +224,46 @@ esp_err_t rw_config_set_wifi(const char *ssid, const char *pass)
 
 /* --------------------------------------------------------------- relay -- */
 
+#define RW_RELAY_PLACEHOLDER_HOST "relay.example.com"
+
+/* ESP_OK only for a non-empty stored override that fits @p out. */
+static esp_err_t get_relay_override(char *out, size_t out_sz)
+{
+    out[0] = '\0';  /* nvs_get_str leaves the buffer untouched on failure */
+    esp_err_t err = get_str(K_RELAY, out, out_sz);
+    if (err == ESP_OK && out[0] == '\0') {
+        err = ESP_ERR_NVS_NOT_FOUND;
+    }
+    if (err != ESP_OK) {
+        out[0] = '\0';
+    }
+    return err;
+}
+
+/* True when the host of a relay base URL, after any ws/wss/http/https scheme,
+ * is the documentation placeholder. */
+static bool relay_is_placeholder(const char *url)
+{
+    static const char *const schemes[] = {"wss://", "ws://", "https://", "http://"};
+    for (size_t i = 0; i < sizeof(schemes) / sizeof(schemes[0]); i++) {
+        size_t n = strlen(schemes[i]);
+        if (strncasecmp(url, schemes[i], n) == 0) {
+            url += n;
+            break;
+        }
+    }
+    size_t host_len = strcspn(url, "/:?#");
+    size_t want = strlen(RW_RELAY_PLACEHOLDER_HOST);
+    return host_len == want &&
+           strncasecmp(url, RW_RELAY_PLACEHOLDER_HOST, want) == 0;
+}
+
 esp_err_t rw_config_get_relay_url(char *out, size_t out_sz)
 {
     if (!out || out_sz == 0) {
         return ESP_ERR_INVALID_ARG;
     }
-    out[0] = '\0';  /* nvs_get_str leaves the buffer untouched on failure */
-    if (get_str(K_RELAY, out, out_sz) == ESP_OK && out[0] != '\0') {
+    if (get_relay_override(out, out_sz) == ESP_OK) {
         return ESP_OK;
     }
     if (strlen(CONFIG_RW_RELAY_URL) >= out_sz) {
@@ -192,12 +273,32 @@ esp_err_t rw_config_get_relay_url(char *out, size_t out_sz)
     return ESP_OK;
 }
 
+bool rw_config_relay_url_is_override(void)
+{
+    char url[RW_RELAY_URL_MAXLEN];
+    return get_relay_override(url, sizeof(url)) == ESP_OK;
+}
+
 esp_err_t rw_config_set_relay_url(const char *url)
 {
     if (!url || url[0] == '\0' || strlen(url) >= RW_RELAY_URL_MAXLEN) {
         return ESP_ERR_INVALID_ARG;
     }
+    /* Choosing the firmware default means "no override": later firmware
+     * defaults must apply instead of a frozen copy of this one. */
+    if (strcmp(url, CONFIG_RW_RELAY_URL) == 0) {
+        return rw_config_clear_relay_url();
+    }
+    /* Never a real relay; init would erase it on the next boot anyway. */
+    if (relay_is_placeholder(url)) {
+        return ESP_ERR_INVALID_ARG;
+    }
     return set_str(K_RELAY, url);
+}
+
+esp_err_t rw_config_clear_relay_url(void)
+{
+    return erase_key(K_RELAY);
 }
 
 esp_err_t rw_config_relay_ws_url(char *out, size_t out_sz)

@@ -69,7 +69,13 @@ or by holding BOOT for 5 s and releasing. The device then:
    rather than a slice of the token, so telling someone the AP password does
    not leak relay credentials. It is printed on the serial console together
    with a scannable `WIFI:` QR code;
-2. serves the single-page UI on `http://192.168.4.1` (no external assets);
+2. serves the single-page UI on `http://192.168.4.1` (no external assets).
+   `GET /info` reports the effective `relayUrl`, `relayOverride` (whether NVS
+   holds an explicit override) and `relayDefault` (`CONFIG_RW_RELAY_URL`).
+   `POST /config {"ssid","pass","relay"?}` stores `relay` only as an override:
+   an absent or empty value keeps the stored one, and the exact firmware
+   default clears it so later firmware defaults apply. At boot, a stored
+   `relay.example.com` placeholder or copy of the default is erased;
 3. accepts `POST /pair {"pubkey","name"}` → `{deviceId, deviceToken, relayUrl,
    kid}`, storing the key in the next free slot;
 4. reboots into normal mode on `POST /finish`.
