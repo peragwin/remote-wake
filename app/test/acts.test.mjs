@@ -13,12 +13,20 @@ import { pairingChange, relayLabel } from '../src/pairing.js';
 /* ───────────────────────────────────────────────────────────── acts ── */
 
 test('no acts list (older firmware) keeps every action enabled', () => {
-  for (const res of [{}, undefined, null, { acts: 'type' }, { acts: { type: true } }]) {
+  for (const res of [{}, undefined, null]) {
     const acts = parseActs(res);
     assert.equal(acts, null);
     for (const a of ['type', 'keys', 'wake', 'power_hold']) assert.equal(actAllowed(acts, a), true);
   }
   assert.equal(actAllowed(undefined, 'type'), true);
+});
+
+test('a present acts that is not a list fails closed', () => {
+  for (const res of [{ acts: 'type' }, { acts: { type: true } }, { acts: 42 }, { acts: null }]) {
+    const acts = parseActs(res);
+    assert.deepEqual(acts, []);
+    for (const a of ['type', 'keys']) assert.equal(actAllowed(acts, a), false);
+  }
 });
 
 test('an acts list without type/keys disables exactly those', () => {

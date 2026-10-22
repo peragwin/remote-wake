@@ -136,15 +136,10 @@ for (const [label, acts] of [
   });
 }
 
-/**
- * Strict expected failure (see the report): a present `acts` that is not an
- * array is read as "older firmware" (parseActs → null), so it re-enables
- * type and keys on a device whose firmware ruled them out. The requirement
- * names "not an array" among the malformed values that must not enable
- * gated actions. When this starts passing, drop the wrapper.
- */
+/* A present `acts` that is not an array fails closed: it must not re-enable
+ * type and keys on a device whose firmware ruled them out. */
 for (const acts of ['ping,status,wake', { type: false }, 42]) {
-  test(`malformed acts (not an array: ${JSON.stringify(acts)}) must not re-enable type/keys [expected failure]`, async () => {
+  test(`malformed acts (not an array: ${JSON.stringify(acts)}) does not re-enable type/keys`, async () => {
     const data = seedData({
       devices: [{ ...A, unlockText: SECRET, acts: NO_KEYBOARD }],
       settings: { activeDeviceId: A.deviceId },
@@ -153,7 +148,7 @@ for (const acts of ['ping,status,wake', { type: false }, 42]) {
     await h.click(h.$('#btn-refresh'));
     const s = keyboardState(h);
     const holds = !s.unlock && !s.keysSend && s.chips.every((on) => !on);
-    assert.equal(holds, false, 'XPASS: the defect is fixed; make this an ordinary test');
+    assert.equal(holds, true, 'type/keys controls stay disabled');
   });
 }
 

@@ -16,13 +16,15 @@ const MAX_ACTS = 32;
 const MAX_ACT_LEN = 24; // RW_ACT_MAXLEN in firmware/main/auth.h
 
 /**
- * The `acts` list from a `status` result, or null when the firmware sent none
- * (or sent something that is not a list).
+ * The `acts` list from a `status` result, or null when the firmware sent none.
+ * A present `acts` that is not a list fails closed: an empty list, so nothing
+ * gated is offered.
  * @returns {string[]|null}
  */
 export function parseActs(res) {
-  const acts = res?.acts;
-  if (!Array.isArray(acts)) return null;
+  if (res == null || typeof res !== 'object' || !('acts' in res)) return null;
+  const acts = res.acts;
+  if (!Array.isArray(acts)) return [];
   const out = [];
   for (const a of acts.slice(0, MAX_ACTS)) {
     if (typeof a === 'string' && a && a.length < MAX_ACT_LEN && !out.includes(a)) out.push(a);
