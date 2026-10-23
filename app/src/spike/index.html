@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Passkey test">
+<link rel="manifest" href="./manifest.json">
+<link rel="stylesheet" href="./spike.css">
+<title>Passkey test</title>
+</head>
+<body>
+<main>
+  <h1>Passkey test</h1>
+  <p class="note">Throwaway page for the remote-wake passkey design. It sends
+    nothing anywhere; results stay on this screen.</p>
+
+  <section>
+    <h2>This context</h2>
+    <pre id="ctx">…</pre>
+  </section>
+
+  <section>
+    <h2>Steps</h2>
+    <ol>
+      <li>In the browser tab: <b>1 · Create passkey</b>.</li>
+      <li>Still in the tab: <b>2 · Find</b> and <b>3 · Sign ×3</b>.</li>
+      <li>Add this page to the Home Screen (Share → Add to Home Screen).</li>
+      <li>Open it from the Home Screen: <b>2 · Find</b>, then <b>3 · Sign ×3</b>.</li>
+      <li>Count how many times Face ID actually appeared during each Sign ×3.
+        Screenshot the log both times.</li>
+    </ol>
+  </section>
+
+  <section class="buttons">
+    <button id="b-create">1 · Create passkey</button>
+    <button id="b-find">2 · Find (no stored ID)</button>
+    <button id="b-sign">3 · Sign ×3</button>
+    <button id="b-clear" class="secondary">Clear log</button>
+  </section>
+
+  <section>
+    <h2>Log</h2>
+    <pre id="log"></pre>
+  </section>
+</main>
+<script type="module" src="./spike.js"></script>
+</body>
+</html>

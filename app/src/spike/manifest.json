@@ -1,0 +1,14 @@
+{
+  "name": "Passkey test",
+  "short_name": "Passkey test",
+  "id": "/remote-wake-passkey-spike/",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#05060d",
+  "theme_color": "#0b0e1a",
+  "icons": [
+    { "src": "../../icons/icon-192.png", "type": "image/png", "sizes": "192x192" },
+    { "src": "../../icons/icon-512.png", "type": "image/png", "sizes": "512x512" }
+  ]
+}

@@ -1,0 +1,32 @@
+:root { color-scheme: dark; }
+body {
+  margin: 0;
+  background: #05060d;
+  color: #e6e8f2;
+  font: 16px/1.45 -apple-system, system-ui, sans-serif;
+}
+main { max-width: 640px; margin: 0 auto; padding: 16px 16px 48px; }
+h1 { font-size: 22px; margin: 8px 0; }
+h2 { font-size: 15px; margin: 20px 0 6px; color: #9aa3c7; }
+.note { color: #9aa3c7; font-size: 14px; }
+pre {
+  white-space: pre-wrap;
+  word-break: break-all;
+  background: #0b0e1a;
+  border: 1px solid #1f2540;
+  border-radius: 8px;
+  padding: 10px;
+  font-size: 12.5px;
+  min-height: 2em;
+}
+.buttons { display: grid; gap: 10px; margin-top: 16px; }
+button {
+  font: inherit;
+  padding: 14px;
+  border-radius: 10px;
+  border: 0;
+  background: #4c6fff;
+  color: #fff;
+}
+button.secondary { background: #1f2540; }
+ol { padding-left: 20px; }
